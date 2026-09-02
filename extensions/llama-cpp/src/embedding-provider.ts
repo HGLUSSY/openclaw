@@ -22,7 +22,7 @@ import {
   ensureLlamaCppModel,
   inspectLlamaServerRuntime,
   prepareManagedLlamaServer,
-  reconcileManagedLlamaServer,
+  reconcileManagedLlamaServer as reconcileLocalService,
   type LlamaServerRuntimeFacts,
 } from "./managed-server.js";
 
@@ -31,8 +31,9 @@ type LlamaCppLocalOptions = {
   modelCacheDir?: string;
 };
 
+type AcquireLocalService = OpenClawPluginApi["runtime"]["llm"]["acquireLocalService"];
 type LocalServiceAwareOptions = EmbeddingProviderCreateOptions & {
-  acquireLocalService?: OpenClawPluginApi["runtime"]["llm"]["acquireLocalService"];
+  acquireLocalService?: AcquireLocalService;
 };
 
 const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
@@ -196,7 +197,7 @@ export const llamaCppEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
     if (!genericAdapter) {
       throw new Error("OpenAI-compatible embedding transport is unavailable.");
     }
-    const acquireLocalService = (options as LocalServiceAwareOptions).acquireLocalService;
+    const acquireLocalService = (options as LocalServiceAwareOptions).acquireLocalService; // SAFETY: core runtime owns this injected option.
     const result = await genericAdapter.create({
       ...options,
       provider: LLAMA_CPP_PROVIDER_ID,
@@ -204,8 +205,8 @@ export const llamaCppEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
       remote: undefined,
       ...(acquireLocalService
         ? {
-            acquireLocalService: (target, signal) =>
-              acquireLocalService({ ...target, reconcile: reconcileManagedLlamaServer }, signal),
+            acquireLocalService: (...[target, signal]: Parameters<AcquireLocalService>) =>
+              acquireLocalService({ ...target, reconcile: reconcileLocalService }, signal),
           }
         : {}),
     });

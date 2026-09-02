@@ -246,7 +246,9 @@ describe("provider local service", () => {
       throw new Error("Expected provider local service lease");
     }
     const failure = new Error("reconcile failed");
-    reconcile.mockRejectedValueOnce(failure);
+    reconcile.mockImplementationOnce(() => {
+      throw failure;
+    });
     await expect(ensureModelProviderLocalService(model)).rejects.toThrow(failure.message);
     const controller = new AbortController();
     const abort = new Error("reconcile aborted");
@@ -499,7 +501,7 @@ describe("provider local service", () => {
     );
   });
 
-  it("cancels local service health probe response bodies", async () => {
+  it("reconciles a healthy external process and cancels its health response body", async () => {
     let socketClosed = false;
     const sockets = new Set<net.Socket>();
     const server = net.createServer((socket) => {

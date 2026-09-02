@@ -171,7 +171,7 @@ describe("managed llama-server", () => {
       const preset = await fs.readFile(presetPath, "utf8");
       expect(preset).toContain("[chat-model]\nmodel = /models/chat.gguf\nctx-size = 8192");
       expect(preset).toContain(
-        "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true",
+        "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nctx-size = 8192\nubatch-size = 2048\nembedding = true",
       );
       expect(preset).not.toMatch(/mmproj|draft/iu);
     } finally {
@@ -206,7 +206,7 @@ describe("managed llama-server", () => {
       });
       const preset = await fs.readFile(presetPath, "utf8");
       expect(preset).toBe(
-        "version = 1\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nembedding = true\n",
+        "version = 1\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/custom-embedding.gguf\nctx-size = 8192\nembedding = true\n",
       );
       expect(preset).not.toContain("jinja");
     } finally {
@@ -259,7 +259,7 @@ describe("managed llama-server", () => {
       const preset = await fs.readFile(presetPath, "utf8");
       expect(preset).toContain(`[chat-model]\nmodel = ${chatModelPath}\nctx-size = 8192`);
       expect(preset).toContain(
-        `[embeddinggemma-300m-qat-q8_0]\nmodel = ${embeddingModelPath}\nembedding = true`,
+        `[embeddinggemma-300m-qat-q8_0]\nmodel = ${embeddingModelPath}\nctx-size = 8192\nembedding = true`,
       );
       expect(preset).not.toContain("ubatch-size");
     } finally {
@@ -336,6 +336,7 @@ describe("managed llama-server", () => {
         "",
         "[embeddinggemma-300m-qat-q8_0]",
         "model = /models/embedding.gguf",
+        "ctx-size = 8192",
         "embedding = true",
         "",
       ].join("\n"),
@@ -357,6 +358,7 @@ describe("managed llama-server", () => {
         "",
         "[embeddinggemma-300m-qat-q8_0]",
         "model = /models/embedding.gguf",
+        "ctx-size = 8192",
         "embedding = true",
         "",
       ].join("\n"),
@@ -385,6 +387,14 @@ describe("managed llama-server", () => {
     await expect(
       reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` }),
     ).rejects.toThrow("llama.cpp preset reload failed: HTTP 500");
+    const controller = new AbortController();
+    controller.abort(new Error("reload aborted"));
+    await expect(
+      reconcileManagedLlamaServer({
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(controller.signal.reason);
     status = 200;
     await reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` });
     expect(reloads).toBe(2);

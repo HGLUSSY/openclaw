@@ -88,7 +88,7 @@ const presetState = {
   desiredRevision: "",
   transition: Promise.resolve(),
 };
-// Pooled embeddings must fit one input in one physical batch. Match llama.cpp's EmbeddingGemma preset.
+// Bound embedding KV memory and fit one input in one physical batch.
 const LLAMA_CPP_EMBEDDING_UBATCH_SIZE = 2048;
 
 function parseHuggingFaceSource(source: string): {
@@ -343,6 +343,7 @@ function renderEmbeddingModelSection(params: { isDefault?: boolean; modelPath: s
   return [
     `[${DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID}]`,
     `model = ${assertIniValue(params.modelPath, "llama.cpp embedding model path")}`,
+    "ctx-size = 8192",
     ...(params.isDefault ? [`ubatch-size = ${LLAMA_CPP_EMBEDDING_UBATCH_SIZE}`] : []),
     "embedding = true",
   ].join("\n");
@@ -367,7 +368,7 @@ function renderLlamaServerPreset(params: {
     "version = 1",
     "",
     ...[...params.chatSections]
-      .toSorted(([left], [right]) => left.localeCompare(right))
+      .toSorted(([left], [right]) => Number(left > right) - Number(left < right))
       .flatMap(([, section]) => [section, ""]),
     params.embeddingSection,
     "",

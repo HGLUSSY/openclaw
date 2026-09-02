@@ -206,14 +206,13 @@ export async function ensureModelProviderLocalService(
   signal?: AbortSignal | null,
 ): Promise<ProviderLocalServiceLease | undefined> {
   const service = getModelProviderLocalService(model);
-  const reconcile = getModelProviderRuntimePluginHandle(model)?.plugin?.reconcileLocalService;
   return await ensureProviderLocalService(
     {
       providerId: model.provider,
       baseUrl: model.baseUrl,
       headers: buildHealthProbeHeaders((model as { headers?: HeadersInit }).headers, probeHeaders),
       service,
-      ...(reconcile ? { reconcile } : {}),
+      reconcile: getModelProviderRuntimePluginHandle(model)?.plugin?.reconcileLocalService,
     },
     signal,
   );
@@ -228,12 +227,12 @@ export async function ensureProviderLocalService(
   if (!lease || !target.reconcile) {
     return lease;
   }
-  await target
-    .reconcile({ baseUrl: target.baseUrl, signal: signal ?? undefined })
-    .catch((error: unknown) => {
-      lease.release();
-      throw error;
-    });
+  try {
+    await target.reconcile({ baseUrl: target.baseUrl, signal: signal ?? undefined });
+  } catch (error) {
+    lease.release();
+    throw error;
+  }
   return lease;
 }
 

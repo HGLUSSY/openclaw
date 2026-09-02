@@ -105,6 +105,7 @@ export type {
   ProviderPrepareExtraParamsContext,
   ProviderPrepareRuntimeAuthContext,
   ProviderPreparedRuntimeAuth,
+  ProviderReconcileLocalServiceContext,
   ProviderReasoningOutputMode,
   ProviderReasoningOutputModeContext,
   ProviderReplayPolicy,
