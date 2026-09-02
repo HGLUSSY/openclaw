@@ -78,7 +78,6 @@ export interface ShellViewHost {
   readonly nativeHistoryState: NativeHistoryState;
   readonly navDrawerOpen: boolean;
   readonly navigationSidebar: HTMLElement;
-  readonly floatingSidebarAttention: HTMLElement;
   readonly onboardingMode: boolean;
   readonly outboxStoreRuntime: OutboxStoreRuntime | null;
   readonly routeState: ShellRouteState;
@@ -570,7 +569,6 @@ export function renderApplicationShell(host: ShellViewHost) {
             </div>`
           : nothing}
         ${renderFloatingUpdateCard({
-          attentionElement: host.floatingSidebarAttention,
           navigationSurfaceHidden,
           mobileNavLayout,
           onboarding,
@@ -588,6 +586,8 @@ export function renderApplicationShell(host: ShellViewHost) {
           onRefresh: () => host.refreshControlUi(),
           onHoldUpdate: () => context.overlays.holdUpdate(),
           onReviewUpdate: () => host.navigate("updates"),
+          onNavigate: (routeId) => host.navigate(routeId),
+          onOpenApprovals: () => host.openApprovals(),
         })}
         <openclaw-router-outlet
           ?inert=${pageActionsBlocked}

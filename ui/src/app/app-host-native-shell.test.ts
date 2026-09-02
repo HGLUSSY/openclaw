@@ -495,9 +495,6 @@ describe("OpenClaw shell update affordance", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const shared = {
-      attentionElement: Object.assign(document.createElement("openclaw-sidebar-attention"), {
-        className: "sidebar-attention--floating",
-      }),
       mobileNavLayout: false,
       onboarding: false,
       updateAvailable: {
@@ -571,9 +568,6 @@ describe("OpenClaw shell update affordance", () => {
       });
       expect(navigationSurfaceHidden).toBe(true);
       const shared = {
-        attentionElement: Object.assign(document.createElement("openclaw-sidebar-attention"), {
-          className: "sidebar-attention--floating",
-        }),
         navigationSurfaceHidden,
         mobileNavLayout: true,
         onboarding: false,
@@ -611,9 +605,6 @@ describe("OpenClaw shell update affordance", () => {
   it("keeps the stale-client refresh visible during onboarding", () => {
     const container = document.createElement("div");
     const shared = {
-      attentionElement: Object.assign(document.createElement("openclaw-sidebar-attention"), {
-        className: "sidebar-attention--floating",
-      }),
       mobileNavLayout: false,
       onboarding: true,
       updateAvailable: null,
