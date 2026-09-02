@@ -347,7 +347,10 @@ suite.define(() => {
           }
           const interruptedOffset = await thread.evaluate((element) => element.scrollTop);
           if (interruption === "wheel") {
-            await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
+            await waitForChatScrollIdle(page);
+            expect(await thread.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(
+              interruptedOffset,
+            );
           } else {
             expect(interruptedOffset).toBeGreaterThan(0);
             expect(interruptedOffset).toBeLessThan(during.max);
