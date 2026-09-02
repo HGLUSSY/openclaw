@@ -39,7 +39,7 @@ vi.mock("../../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => 
   return {
     ...actual,
     waitForMcpLoopbackToolCallCaptureIdle: (
-      captureKey: string,
+      captureKey: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[0],
       options: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[1],
     ) =>
       actual.waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
@@ -2787,14 +2787,17 @@ describe("executePreparedCliRun supervisor output capture", () => {
       createData: () => Buffer.from("secret"),
     };
     context.preparedBackend.secretInput = secretInput;
-    const activateCapture = vi.fn<(captureKey: string) => void>();
-    const deactivateCapture = vi.fn<(captureKey: string) => void>();
+    const deactivateCapture = vi.fn<(captureKey: string, reason: string) => Promise<void>>(
+      async () => {},
+    );
+    const activateCapture = vi.fn(
+      (captureKey: string) => (reason: string) => deactivateCapture(captureKey, reason),
+    );
     context.preparedBackend.mcpClientGrantCapture = {
       transportToken: "capture-test-token",
       adoptProcessToken: vi.fn(),
       revokeProcessToken: vi.fn(),
       activate: activateCapture,
-      deactivate: deactivateCapture,
     };
     supervisorSpawnMock.mockRejectedValueOnce(new Error("spawn failed"));
 
@@ -2802,7 +2805,10 @@ describe("executePreparedCliRun supervisor output capture", () => {
 
     expect(activateCapture).toHaveBeenCalledOnce();
     expect(requireSupervisorSpawnInput()).toEqual(expect.objectContaining({ secretInput }));
-    expect(deactivateCapture).toHaveBeenCalledExactlyOnceWith(activateCapture.mock.calls[0]?.[0]);
+    expect(deactivateCapture).toHaveBeenCalledExactlyOnceWith(
+      activateCapture.mock.calls[0]?.[0],
+      "error",
+    );
     expect(activateCapture.mock.invocationCallOrder[0]).toBeLessThan(
       supervisorSpawnMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
@@ -2811,14 +2817,17 @@ describe("executePreparedCliRun supervisor output capture", () => {
   it("captures non-Claude JSONL sends and fences every attempt with a unique key", async () => {
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "local-cli" });
     context.mcpDeliveryCapture = true;
-    const activateCapture = vi.fn<(captureKey: string) => void>();
-    const deactivateCapture = vi.fn<(captureKey: string) => void>();
+    const deactivateCapture = vi.fn<(captureKey: string, reason: string) => Promise<void>>(
+      async () => {},
+    );
+    const activateCapture = vi.fn(
+      (captureKey: string) => (reason: string) => deactivateCapture(captureKey, reason),
+    );
     context.preparedBackend.mcpClientGrantCapture = {
       transportToken: "capture-test-token",
       adoptProcessToken: vi.fn(),
       revokeProcessToken: vi.fn(),
       activate: activateCapture,
-      deactivate: deactivateCapture,
     };
     const captureKeys: string[] = [];
     supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {

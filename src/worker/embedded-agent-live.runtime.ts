@@ -8,6 +8,7 @@ import {
 import { redactAgentDiagnosticPayload } from "../agents/diagnostic-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveAssistantMessagePhase,
   type AssistantPhase,
@@ -309,7 +310,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
     }
   };
   const enqueueRunFailure = (failure: { aborted: boolean; error: Error }) => {
-    enqueueTerminal({ aborted: failure.aborted, error: failure.error.message });
+    enqueueTerminal({ aborted: failure.aborted, error: formatErrorMessage(failure.error) });
   };
   // Emits directly (not via the degradable preview queue): finishing is the durable
   // result fence that must reach the Gateway before post-worker reconciliation.

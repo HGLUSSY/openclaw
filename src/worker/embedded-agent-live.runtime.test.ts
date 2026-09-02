@@ -80,11 +80,24 @@ describe("createWorkerLiveRuntime", () => {
 
     runtime.enqueueRunFailure({
       aborted: false,
-      error: new Error("failed data:video/mp4;base64,QUJDRA=="),
+      error: new AggregateError(
+        [new Error(`native close failed data:video/mp4;base64,QUJDRA== ${"x".repeat(8_000)}`)],
+        "cleanup failed",
+      ),
     });
     await runtime.emitTerminal();
 
     expect(emitted).toHaveLength(1);
+    expect(emitted[0]?.payload).toMatchObject({
+      phase: "finishing",
+      stopReason: "error",
+      error: expect.stringContaining("cleanup failed | native close failed"),
+    });
     expect(JSON.stringify(emitted)).not.toContain("QUJDRA==");
+    const event = emitted[0];
+    if (event?.kind !== "lifecycle" || event.payload.phase !== "finishing") {
+      throw new Error("expected a finishing event");
+    }
+    expect(Buffer.byteLength(event.payload.error ?? "", "utf8")).toBeLessThanOrEqual(4 * 1024);
   });
 });

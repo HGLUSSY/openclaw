@@ -592,7 +592,7 @@ describe("runEmbeddedAgentEntry", () => {
       };
     });
     const { runEmbeddedAgentEntry } = await import("./run-entry.js");
-    await runEmbeddedAgentEntry({
+    const result = await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "provider", model: "model" },
       identity: { runId: "settle-exhausted", agentId: "main", sessionId: "session-1" },
       harness: {
@@ -608,6 +608,10 @@ describe("runEmbeddedAgentEntry", () => {
       },
     });
 
+    expect(result.terminal.outcome.status).toBe("error");
+    expect(result.result.meta.executionTrace?.winnerProvider).toBeUndefined();
+    expect(result.result.meta.executionTrace?.winnerModel).toBeUndefined();
+    expect(result.result.meta.executionTrace?.attempts).toBeUndefined();
     expect(state.finalizedAttempts).toEqual([]);
     expect(state.discardedAttempts).toEqual(["fallback-provider"]);
   });
@@ -615,48 +619,109 @@ describe("runEmbeddedAgentEntry", () => {
   it.each([
     {
       label: "yielded",
+      expectedStatus: "ok",
+      expectedWinner: true,
+      withTrace: true,
       meta: { yielded: true, livenessState: "paused" as const, stopReason: "end_turn" },
     },
-    { label: "aborted", meta: { aborted: true, stopReason: "error" } },
-    { label: "timed out", meta: { timeoutPhase: "provider" as const, stopReason: "timeout" } },
+    {
+      label: "aborted",
+      expectedStatus: "error",
+      expectedWinner: false,
+      withTrace: false,
+      meta: { aborted: true, stopReason: "error" },
+    },
+    {
+      label: "timed out",
+      expectedStatus: "timeout",
+      expectedWinner: false,
+      withTrace: true,
+      meta: { timeoutPhase: "provider" as const, stopReason: "timeout" },
+    },
     {
       label: "errored",
+      expectedStatus: "error",
+      expectedWinner: false,
+      withTrace: true,
       meta: {
         error: { kind: "retry_limit" as const, message: "provider failed" },
         stopReason: "error",
       },
     },
-  ])("does not finalize a $label candidate", async ({ meta }) => {
-    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
-      return {
-        outcome: "completed" as const,
-        result,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
+  ])(
+    "does not finalize a $label candidate",
+    async ({ meta, expectedStatus, expectedWinner, withTrace }) => {
+      const innerFailure = {
+        provider: "inner-provider",
+        model: "inner-model",
+        result: "same_model_transient" as const,
+        reason: "rate_limit",
       };
-    });
-    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
-    await runEmbeddedAgentEntry({
-      selection: { cfg: {}, provider: "provider", model: "model" },
-      identity: { runId: "settle-non-terminal", agentId: "main", sessionId: "session-1" },
-      harness: {
-        workspaceDir: "/tmp/workspace",
-        preparation: { kind: "direct" },
-        resolveRuntimeOverride: () => undefined,
-      },
-      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => true },
-      sessionOverride: { kind: "preserve" },
-      runCandidate: async (provider, model, options) => {
-        recordTurnAttempt(options.onContextEngineTurnCandidate, "candidate");
-        return makeResult({ provider, model, meta });
-      },
-    });
+      state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+        const result = await params.run(
+          params.provider,
+          params.model,
+          initialAttemptOptions(params),
+        );
+        return {
+          outcome: "completed" as const,
+          result,
+          provider: params.provider,
+          model: params.model,
+          attempts: [],
+        };
+      });
+      const { runEmbeddedAgentEntry } = await import("./run-entry.js");
+      const result = await runEmbeddedAgentEntry({
+        selection: { cfg: {}, provider: "provider", model: "model" },
+        identity: { runId: "settle-non-terminal", agentId: "main", sessionId: "session-1" },
+        harness: {
+          workspaceDir: "/tmp/workspace",
+          preparation: { kind: "direct" },
+          resolveRuntimeOverride: () => undefined,
+        },
+        behavior: { kind: "command-rpc", hasCommittedSideEffect: () => true },
+        sessionOverride: { kind: "preserve" },
+        runCandidate: async (provider, model, options) => {
+          recordTurnAttempt(options.onContextEngineTurnCandidate, "candidate");
+          return makeResult({
+            provider,
+            model,
+            meta: {
+              ...meta,
+              ...(withTrace
+                ? {
+                    executionTrace: {
+                      winnerProvider: provider,
+                      winnerModel: model,
+                      attempts: [innerFailure, { provider, model, result: "success" as const }],
+                      runner: "embedded" as const,
+                    },
+                  }
+                : {}),
+            },
+          });
+        },
+      });
 
-    expect(state.finalizedAttempts).toEqual([]);
-    expect(state.discardedAttempts).toEqual(["candidate"]);
-  });
+      expect(result.terminal.outcome.status).toBe(expectedStatus);
+      const trace = result.result.meta.executionTrace;
+      expect(trace?.winnerProvider).toBe(expectedWinner ? "provider" : undefined);
+      expect(trace?.winnerModel).toBe(expectedWinner ? "model" : undefined);
+      expect(trace?.attempts).toEqual(
+        withTrace
+          ? [
+              innerFailure,
+              ...(expectedWinner
+                ? [{ provider: "provider", model: "model", result: "success" }]
+                : []),
+            ]
+          : undefined,
+      );
+      expect(state.finalizedAttempts).toEqual([]);
+      expect(state.discardedAttempts).toEqual(["candidate"]);
+    },
+  );
 
   it("does not finalize a candidate when classification throws", async () => {
     const classificationError = new Error("classification failed");

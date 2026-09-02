@@ -1,10 +1,16 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { recordModelFallbackStop } from "../../agents/failover-error.js";
 import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-policy.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { withSessionPlacementComputer } from "../../agents/session-placement-computer.js";
 import { withSessionSkillResources } from "../../agents/session-placement-skill-resources.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import {
+  attachErrorDiagnostic,
+  formatErrorMessageForDisplay,
+} from "../../infra/error-diagnostics.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import {
@@ -63,8 +69,11 @@ function workspaceError(error: unknown): string {
   return truncateUtf16Safe(message || "cloud worker turn failed", 1_024);
 }
 
-function remoteExecWorkspaceFailure(executionError: unknown, reconciliationError: unknown): Error {
-  const executionMessage = formatErrorMessage(executionError);
+export function workerWorkspaceFailure(
+  executionError: unknown,
+  reconciliationError: unknown,
+): Error {
+  const executionMessage = formatErrorMessageForDisplay(executionError);
   const reconciliationDetail =
     reconciliationError instanceof WorkerWorkspaceReconciliationError &&
     reconciliationError.cause !== undefined
@@ -353,8 +362,7 @@ export async function executeRemoteExecTurn(params: {
   });
   params.placements.markWorkspaceResultPending(params.turnClaim);
   params.onHandoff();
-  let result: EmbeddedAgentRunResult | undefined;
-  let executionError: unknown;
+  let execution: Result<EmbeddedAgentRunResult, unknown>;
   let executionActive = true;
   const originalPrompt = params.turn.prompt;
   const originalTranscriptPrompt = params.turn.transcriptPrompt;
@@ -390,7 +398,7 @@ export async function executeRemoteExecTurn(params: {
       params.turn.transcriptPrompt ??= originalPrompt;
       params.turn.prompt = `${originalPrompt}\n\n${attachmentNote}`;
     }
-    result = await withPluginRuntimeGatewayRequestScope(
+    const result = await withPluginRuntimeGatewayRequestScope(
       {
         isWebchatConnect: () => false,
         ...getPluginRuntimeGatewayRequestScope(),
@@ -435,6 +443,7 @@ export async function executeRemoteExecTurn(params: {
             agentId: params.placement.agentId,
             isActive: () => executionActive,
             sandboxToolPolicy: computer ? sandboxToolPolicy : undefined,
+            computerUse: computer?.descriptor.computerUse ?? null,
             bind: (run) => (computer ? computer.bind(run) : null),
           },
           () =>
@@ -443,17 +452,52 @@ export async function executeRemoteExecTurn(params: {
               : params.runLocal(),
         ),
     );
+    execution = { ok: true, value: result };
   } catch (error) {
-    executionError = error;
+    execution = { ok: false, error };
   } finally {
-    await skillResources?.cleanup().catch(() => undefined);
+    // Execution admission ends before artifact cleanup; placement authority still owns teardown.
     executionActive = false;
+    await skillResources?.cleanup().catch(() => undefined);
     params.turn.prompt = originalPrompt;
     params.turn.transcriptPrompt = originalTranscriptPrompt;
-    try {
-      await computer?.close("turn-complete");
-    } catch (error) {
-      executionError ??= error;
+  }
+  try {
+    await computer?.close("turn-complete");
+  } catch (error) {
+    const diagnostic = `Computer cleanup also failed: ${workspaceError(error)}`;
+    if (execution.ok) {
+      const result = execution.value;
+      const returnedError = result.meta.error;
+      execution = {
+        ok: true,
+        value: {
+          ...result,
+          payloads: [...(result.payloads ?? []), { text: diagnostic, isError: true }],
+          meta: {
+            ...result.meta,
+            replayInvalid: true,
+            error: {
+              ...returnedError,
+              kind: returnedError?.kind ?? "incomplete_turn",
+              message: returnedError ? `${returnedError.message}\n${diagnostic}` : diagnostic,
+              // Incomplete-turn fallbackSafe otherwise overrides replayInvalid.
+              fallbackSafe: false,
+            },
+          },
+        },
+      };
+    } else {
+      // Keep typed/abort identity; the owner records replay denial separately from display text.
+      const primary =
+        execution.error instanceof Error
+          ? execution.error
+          : new Error(formatErrorMessage(execution.error));
+      recordModelFallbackStop(primary);
+      execution = {
+        ok: false,
+        error: attachErrorDiagnostic(primary, formatErrorMessageForDisplay(primary, diagnostic)),
+      };
     }
   }
   const workspaceConflict = await reconcileWorkspaceAfterTurn({
@@ -489,19 +533,20 @@ export async function executeRemoteExecTurn(params: {
         reason: "node-disconnect",
       });
     }
-    if (executionError) {
-      throw remoteExecWorkspaceFailure(executionError, reconciliationError);
+    if (!execution.ok) {
+      throw workerWorkspaceFailure(execution.error, reconciliationError);
+    }
+    if (execution.value.meta.error) {
+      throw workerWorkspaceFailure(execution.value.meta.error.message, reconciliationError);
     }
     throw reconciliationError;
   });
-  if (executionError) {
-    throw executionError instanceof Error
-      ? executionError
-      : new Error(formatErrorMessage(executionError));
+  if (!execution.ok) {
+    throw execution.error instanceof Error
+      ? execution.error
+      : new Error(formatErrorMessage(execution.error));
   }
-  if (!result) {
-    throw new Error("Remote-exec local harness completed without a result");
-  }
+  const result = execution.value;
   if (!workspaceConflict) {
     return result;
   }

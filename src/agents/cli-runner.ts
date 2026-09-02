@@ -35,14 +35,17 @@ import {
   type CliRecoveryOptions,
 } from "./cli-runner/cli-run-recovery.js";
 import {
-  assertCliRuntimeBinding,
   buildBlockedCliRunResult,
   buildCliDeliveredFailure,
   buildCliRunResult,
-  cliRunSettlementDeps,
+  buildCliToolCleanupResult,
   formatCliTerminalInterruption,
   isClaudeCliBackend,
   resolveCliSourceReplyMirror,
+} from "./cli-runner/cli-run-results.js";
+import {
+  assertCliRuntimeBinding,
+  cliRunSettlementDeps,
   settleCliBackendOutcome,
   settleCliPreparationError,
   settlePreparedCliRun,
@@ -71,6 +74,11 @@ import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
 } from "./cli-runner/session-history.js";
+import {
+  findCliToolCleanupFailure,
+  formatCliToolCleanupError,
+  type CliToolCleanupFailure,
+} from "./cli-runner/tool-cleanup-error.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "./command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
@@ -254,13 +262,6 @@ export async function runPreparedCliAgent(
     lane: params.lane,
   };
   const sessionBindingDisabled = context.preparedBackend.backend.sessionMode === "none";
-  const preparedContextAgentMeta =
-    isClaudeCliBackend(params.provider) && context.contextWindowInfo
-      ? {
-          contextTokens: context.contextWindowInfo.tokens,
-          contextTokensSource: "resolved" as const,
-        }
-      : {};
   const isolatedCompletion = params.isolatedCompletion === true;
   const controlOperation = params.controlOperation !== undefined;
   const turnSideEffectsDisabled = isolatedCompletion || controlOperation;
@@ -343,6 +344,7 @@ export async function runPreparedCliAgent(
 
   let deliveredMessagingSideEffect = false;
   let userTurnHandled = false;
+  let toolCleanupFailure: CliToolCleanupFailure | undefined;
   const executeCliAttempt = async (cliSessionIdToUse?: string, options?: CliRecoveryOptions) => {
     const timeoutMs = options?.timeoutMs ?? params.timeoutMs;
     const forkCliSessionOnResume =
@@ -481,7 +483,6 @@ export async function runPreparedCliAgent(
         usedHistoryPrompt,
         userTurnHandled,
         sessionBindingDisabled,
-        preparedContextAgentMeta,
       });
     }
     if (controlOperation) {
@@ -501,7 +502,6 @@ export async function runPreparedCliAgent(
         usedHistoryPrompt,
         userTurnHandled,
         sessionBindingDisabled,
-        preparedContextAgentMeta,
       });
     }
     await bootstrapHarnessContextEngine({
@@ -584,31 +584,39 @@ export async function runPreparedCliAgent(
           usedHistoryPrompt,
           userTurnHandled,
           sessionBindingDisabled,
-          preparedContextAgentMeta,
         });
       } catch (error) {
         throw attachCliMessagingDeliveryEvidence(error, output);
       }
     };
 
-    const finishDeliveredFailure = async (
+    const finishTerminalFailure = async (
       error: unknown,
     ): Promise<EmbeddedAgentRunResult | undefined> => {
+      const cleanupFailure = findCliToolCleanupFailure(error);
       const evidence = getCliMessagingDeliveryEvidence(error);
-      if (!evidence) {
+      if (!cleanupFailure && !evidence) {
         return undefined;
       }
+      toolCleanupFailure ??= cleanupFailure;
       await runCliAgentEndHook(params, {
-        event: buildFailedAgentEndEvent(formatErrorMessage(error)),
+        event: buildFailedAgentEndEvent(
+          cleanupFailure ? formatCliToolCleanupError(error) : formatErrorMessage(error),
+        ),
         ctx: hookContext,
         hookRunner,
       });
+      if (cleanupFailure) {
+        return buildCliToolCleanupResult(context, cleanupFailure);
+      }
+      if (!evidence) {
+        return undefined;
+      }
       deliveredMessagingSideEffect = true;
       return buildCliDeliveredFailure({
         error,
         evidence,
         context,
-        preparedContextAgentMeta,
         sessionBindingDisabled,
         reusableCliSessionId: resolveCliSessionId(context.reusableCliSession),
       });
@@ -651,7 +659,6 @@ export async function runPreparedCliAgent(
         return buildBlockedCliRunResult({
           message: blockMessage,
           context,
-          preparedContextAgentMeta,
           sessionBindingDisabled,
         });
       }
@@ -673,7 +680,6 @@ export async function runPreparedCliAgent(
         return buildBlockedCliRunResult({
           message: blockMessage,
           context,
-          preparedContextAgentMeta,
           sessionBindingDisabled,
         });
       }
@@ -689,7 +695,7 @@ export async function runPreparedCliAgent(
       context,
       executeAttempt: executeCliAttempt,
       finishAttempt: finishCliAttempt,
-      finishDeliveredFailure,
+      finishTerminalFailure,
       onTerminalFailure: async (error) => {
         await runCliAgentEndHook(params, {
           event: buildFailedAgentEndEvent(formatErrorMessage(error)),
@@ -708,6 +714,7 @@ export async function runPreparedCliAgent(
   } catch (error) {
     runFailed = true;
     runError = error;
+    toolCleanupFailure ??= findCliToolCleanupFailure(error);
   }
   let cleanupError: Error | undefined;
   try {
@@ -716,6 +723,8 @@ export async function runPreparedCliAgent(
     cleanupError = error as Error;
   }
   return settleCliBackendOutcome({
+    context,
+    toolCleanupFailure,
     runResult,
     runError,
     runFailed,

@@ -36,6 +36,18 @@ private actor StringCapture {
     }
 }
 
+private actor InvocationRouteCapture {
+    private var routes: [String: GatewayNodeInvocationRoute] = [:]
+
+    func record(_ name: String, route: GatewayNodeInvocationRoute?) {
+        self.routes[name] = route
+    }
+
+    func get(_ name: String) -> GatewayNodeInvocationRoute? {
+        self.routes[name]
+    }
+}
+
 /// Delivers a pong asynchronously, well before the deadline, so a cancelled deadline
 /// task racing the gate would surface as a spurious timeout.
 private final class DelayedPongWebSocketTask: WebSocketTasking, @unchecked Sendable {
@@ -1456,6 +1468,7 @@ struct GatewayNodeSessionTests {
         let allowAdmission = AsyncGate()
         let invocations = DisconnectProbe()
         let disconnects = DisconnectProbe()
+        let invocationRoutes = InvocationRouteCapture()
         let options = nodeConnectOptions(
             caps: ["computer"],
             commands: ["computer.act"],
@@ -1466,10 +1479,15 @@ struct GatewayNodeSessionTests {
             testURL("ws://first.example.invalid"),
             options: options,
             session: session,
-            onDisconnected: { reason in await disconnects.record(reason) },
+            onDisconnected: { reason in
+                await invocationRoutes.record("disconnected", route: GatewayNodeSession.invocationRoute)
+                await disconnects.record(reason)
+            },
             onInvoke: { request in
+                await invocationRoutes.record("invoke", route: GatewayNodeSession.invocationRoute)
                 await invokeStarted.wait()
                 await allowAdmission.wait()
+                await invocationRoutes.record("resumed", route: GatewayNodeSession.invocationRoute)
                 guard !Task.isCancelled else {
                     return BridgeInvokeResponse(
                         id: request.id,
@@ -1480,6 +1498,9 @@ struct GatewayNodeSessionTests {
                 }
                 await invocations.record(request.id)
                 return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: nil, error: nil)
+            },
+            onRouteInvalidated: {
+                await invocationRoutes.record("invalidated", route: GatewayNodeSession.invocationRoute)
             })
         let firstTask = try #require(session.latestTask())
         try await waitUntil("receive loop armed before delayed invoke") {
@@ -1489,6 +1510,8 @@ struct GatewayNodeSessionTests {
         try await waitUntil("delayed invoke started") {
             await invokeStarted.hasStarted()
         }
+        let invocationRoute = try #require(await invocationRoutes.get("invoke"))
+        #expect(invocationRoute.isActive)
         await invokeStarted.release()
         try await waitUntil("receive loop rearmed before disconnect") {
             firstTask.hasPendingReceiveHandler()
@@ -1498,7 +1521,14 @@ struct GatewayNodeSessionTests {
         try await waitUntil("disconnect callback ran") {
             await !(disconnects.values()).isEmpty
         }
+        #expect(!invocationRoute.isActive)
+        #expect(await invocationRoutes.get("invalidated") === invocationRoute)
+        #expect(await invocationRoutes.get("disconnected") === invocationRoute)
         await allowAdmission.release()
+        try await waitUntil("old invoke resumed with its retired route") {
+            await invocationRoutes.get("resumed") != nil
+        }
+        #expect(await invocationRoutes.get("resumed") === invocationRoute)
         try await waitUntil("replacement socket created") {
             session.snapshotMakeCount() >= 2
         }
@@ -1550,15 +1580,16 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
-    func `route switch cancels queued PTZ control and waits for invoke cleanup`() async throws {
+    @Test(arguments: [OpenClawCameraCommand.ptzControl.rawValue, OpenClawScreenCommand.snapshot.rawValue])
+    func `route switch cancels native work and waits for invoke cleanup`(command: String) async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
         let invokeGate = AsyncGate()
         let cancellations = DisconnectProbe()
+        let invocationRoutes = InvocationRouteCapture()
         let options = nodeConnectOptions(
-            caps: ["camera"],
-            commands: [OpenClawCameraCommand.ptzControl.rawValue],
+            caps: ["camera", "screen"],
+            commands: [command],
             clientId: "openclaw-macos")
 
         try await gateway.connectForTest(testURL("ws://first.example.invalid"), options: options, session: session)
@@ -1566,11 +1597,12 @@ struct GatewayNodeSessionTests {
         let invoking = Task {
             await gateway.invokeIfCurrentRoute(
                 BridgeInvokeRequest(
-                    id: "queued-ptz",
-                    command: OpenClawCameraCommand.ptzControl.rawValue,
+                    id: "queued-native",
+                    command: command,
                     paramsJSON: nil),
                 expectedRoute: route,
                 onInvoke: { request in
+                    await invocationRoutes.record("old", route: GatewayNodeSession.invocationRoute)
                     await invokeGate.wait()
                     if Task.isCancelled {
                         await cancellations.record(request.id)
@@ -1581,9 +1613,11 @@ struct GatewayNodeSessionTests {
                         error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: route changed"))
                 })
         }
-        try await waitUntil("PTZ invoke queued before hardware admission") {
+        try await waitUntil("native invoke queued before hardware admission") {
             await invokeGate.hasStarted()
         }
+        let oldInvocationRoute = try #require(await invocationRoutes.get("old"))
+        #expect(oldInvocationRoute.isActive)
 
         let replacement = Task {
             try await gateway.connectForTest(
@@ -1591,17 +1625,30 @@ struct GatewayNodeSessionTests {
                 options: options,
                 session: session)
         }
-        try await waitUntil("replacement detached old PTZ route") {
+        try await waitUntil("replacement detached old native route") {
             await gateway.currentRoute() == nil
         }
+        #expect(!oldInvocationRoute.isActive)
         #expect(session.snapshotMakeCount() == 1)
 
         await invokeGate.release()
         #expect(await (invoking.value).ok == false)
         try await replacement.value
-        #expect(await cancellations.values() == ["queued-ptz"])
+        #expect(await cancellations.values() == ["queued-native"])
         #expect(session.snapshotMakeCount() == 2)
+        let replacementRoute = try #require(await gateway.currentRoute())
+        _ = await gateway.invokeIfCurrentRoute(
+            BridgeInvokeRequest(id: "successor", command: command, paramsJSON: nil),
+            expectedRoute: replacementRoute,
+            onInvoke: { request in
+                await invocationRoutes.record("successor", route: GatewayNodeSession.invocationRoute)
+                return BridgeInvokeResponse(id: request.id, ok: true)
+            })
+        let successorInvocationRoute = try #require(await invocationRoutes.get("successor"))
+        #expect(successorInvocationRoute !== oldInvocationRoute)
+        #expect(successorInvocationRoute.isActive)
         await gateway.disconnect()
+        #expect(!successorInvocationRoute.isActive)
     }
 
     @Test
