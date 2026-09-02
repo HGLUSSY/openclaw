@@ -32,7 +32,9 @@ const cwd = path.join(root, "fixture");
 await fs.mkdir(retained);
 await fs.mkdir(path.join(cwd, "dist"), { recursive: true });
 const resourceOwner = createVitestResourceOwner(retained);
-for (const key of ["TMPDIR", "TMP", "TEMP"]) process.env[key] = retained;
+for (const key of ["TMPDIR", "TMP", "TEMP"]) {
+  process.env[key] = retained;
+}
 
 const spawned = [];
 const taskkills = [];
@@ -132,8 +134,8 @@ process.exit(1);
     try {
       resourceOwner.assertReleased();
       return false;
-    } catch (error) {
-      assert.match(error.message, /Unreleased Vitest resource claim/);
+    } catch (claimError) {
+      assert.match(claimError.message, /Unreleased Vitest resource claim/);
       return true;
     }
   })();
@@ -166,12 +168,18 @@ process.exit(1);
     await runQaGatewayFixture(
       () =>
         new Promise((resolve, reject) => {
-          process.send("release-writer", (error) => (error ? reject(error) : resolve()));
+          process.send(
+            "release-writer",
+            /** @param {Error | null} sendError */
+            (sendError) => (sendError ? reject(sendError) : resolve()),
+          );
         }),
       async () => {
         await runQaGatewayFixture(
           async () => {
-            if (outcome) await outcome;
+            if (outcome) {
+              await outcome;
+            }
             await instance?.stopGateway();
           },
           async () => {

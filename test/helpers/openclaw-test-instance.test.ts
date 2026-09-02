@@ -404,7 +404,9 @@ describe("openclaw test instance", () => {
       const output = createBoundedChildOutput();
       const release = () => control.unblock();
       signal.addEventListener("abort", release, { once: true });
-      if (signal.aborted) release();
+      if (signal.aborted) {
+        release();
+      }
       try {
         await trackOperation(
           runQaGatewayFixture(
@@ -433,7 +435,9 @@ describe("openclaw test instance", () => {
                     const closed = once(child, "close");
                     void closed.catch(() => {});
                     child.on("message", (message) => {
-                      if (message === "release-writer") release();
+                      if (message === "release-writer") {
+                        release();
+                      }
                     });
                     ready = withTestTimeout(
                       Promise.race([
@@ -474,10 +478,9 @@ describe("openclaw test instance", () => {
                 await runQaGatewayFixture(
                   async () => {
                     await ready;
-                    const result = await outcome;
-                    if (result.error) throw result.error;
+                    const code = await command;
                     const report = await readReport();
-                    expect(result.code, `${output.text()}\n${JSON.stringify(report)}`).toBe(0);
+                    expect(code, `${output.text()}\n${JSON.stringify(report)}`).toBe(0);
                     expect(report.retentionAndAdmissionVerified).toBe(true);
                     expect(report.failedCleanupSurvivedRescue).toBe(true);
                   },
@@ -486,7 +489,9 @@ describe("openclaw test instance", () => {
                       release();
                       await ready?.catch(() => {});
                       const result = await outcome;
-                      if (hasUnjoinedWork(result.error)) throw result.error;
+                      if (hasUnjoinedWork(result.error)) {
+                        await command;
+                      }
                       const report = await readReport();
                       if (
                         report.cleanupFailure ||
