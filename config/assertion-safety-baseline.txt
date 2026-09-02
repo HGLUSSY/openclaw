@@ -2819,7 +2819,6 @@ src/gateway/mcp-http.handlers.ts	4
 src/gateway/mcp-http.request.ts	2
 src/gateway/mcp-http.schema.ts	3
 src/gateway/method-scopes.ts	10
-src/gateway/methods/core-descriptors.ts	1
 src/gateway/node-browser-proxy-policy.ts	1
 src/gateway/node-command-policy.ts	2
 src/gateway/node-invoke-system-run-approval.ts	1
@@ -2851,7 +2850,7 @@ src/gateway/server-instance-runtime.ts	3
 src/gateway/server-lifecycle.ts	1
 src/gateway/server-maintenance.ts	4
 src/gateway/server-methods-list.ts	1
-src/gateway/server-methods.ts	4
+src/gateway/server-methods.ts	3
 src/gateway/server-methods/agent-run-handler.ts	1
 src/gateway/server-methods/agent-session-patch.ts	1
 src/gateway/server-methods/agent-session-reset.ts	2

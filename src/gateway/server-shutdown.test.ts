@@ -16,6 +16,55 @@ describe("gateway shutdown notice", () => {
 });
 
 describe("gateway shutdown steps", () => {
+  it.each([false, true])(
+    "retains prior failures and respects a required join (failure: %s)",
+    async (joinFails) => {
+      const stopError = new Error("worker stop failed");
+      const drainError = new Error("connection cleanup failed");
+      const closeDependencies = vi.fn();
+      const drain = vi.fn(async () => {
+        if (joinFails) {
+          throw drainError;
+        }
+      });
+      const onError = vi.fn();
+      await expect(
+        runGatewayShutdownSteps({
+          steps: [
+            {
+              name: "connection-dependent sidecars",
+              run: () => {
+                throw stopError;
+              },
+            },
+            { name: "received connection work", run: drain, required: true },
+            { name: "state dependencies", run: closeDependencies },
+          ],
+          onError,
+        }),
+      ).rejects.toMatchObject({
+        errors: [
+          {
+            message: "shutdown step failed (connection-dependent sidecars): worker stop failed",
+            cause: stopError,
+          },
+          ...(joinFails
+            ? [
+                {
+                  message:
+                    "shutdown step failed (received connection work): connection cleanup failed",
+                  cause: drainError,
+                },
+              ]
+            : []),
+        ],
+      });
+      expect(drain).toHaveBeenCalledOnce();
+      expect(closeDependencies).toHaveBeenCalledTimes(joinFails ? 0 : 1);
+      expect(onError).toHaveBeenCalledTimes(joinFails ? 2 : 1);
+    },
+  );
+
   it("names an unavailable module step and continues the remaining shutdown", async () => {
     const missingModule = Object.assign(new Error("Cannot find module 'rotated-chunk.js'"), {
       code: "ERR_MODULE_NOT_FOUND",

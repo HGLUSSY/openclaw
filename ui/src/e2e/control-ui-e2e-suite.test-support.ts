@@ -12,6 +12,7 @@ import {
   type TestContext,
 } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
@@ -117,27 +118,6 @@ function assertControlUiForkActive(): void {
   if (retiredForkError) {
     throw retiredForkError;
   }
-}
-
-async function withControlUiFinalization<T>(
-  run: () => Promise<T>,
-  close: () => Promise<void>,
-): Promise<T> {
-  const [body] = await Promise.allSettled([Promise.resolve().then(run)]);
-  try {
-    await close();
-  } catch (error) {
-    if (body.status === "rejected") {
-      throw new AggregateError([body.reason, error], "Control UI E2E body and cleanup failed", {
-        cause: error,
-      });
-    }
-    throw error;
-  }
-  if (body.status === "rejected") {
-    throw body.reason;
-  }
-  return body.value;
 }
 
 function throwControlUiCleanupErrors(errors: unknown[]): void {
@@ -349,7 +329,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
         return joinCleanup(finished, "scenario cleanup", retainedState);
       }, 0);
       operation.resolve(
-        withControlUiFinalization(
+        runQaGatewayFixture(
           async () => {
             owner.signal.throwIfAborted();
             return await scenario.run(owner.signal);
@@ -475,7 +455,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
     },
     async withPage(contextOptions, run) {
       const context = await newBrowserContext(contextOptions);
-      return await withControlUiFinalization(
+      return await runQaGatewayFixture(
         async () => {
           const page = await context.newPage();
           try {

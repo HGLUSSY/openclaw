@@ -21,7 +21,9 @@ describe("Gateway connection work", () => {
     });
     let drained = false;
     work.beginClose();
-    const closing = work.drain().then(() => {
+    expect(work.signal.aborted).toBe(true);
+    expect(events).toEqual(["request"]);
+    const closing = Promise.all([work.drain(), work.drain()]).then(() => {
       drained = true;
     });
     try {

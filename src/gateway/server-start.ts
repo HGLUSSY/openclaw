@@ -55,6 +55,7 @@ export async function startGatewayServerCore(
     runClosePrelude,
     stopRegisteredGatewayLifetimeSidecars,
     stopRegisteredPostReadySidecars,
+    stopConnectionDependentSidecars,
     terminalSessions,
     shutdownRuntime,
   } = gatewayKernel;
@@ -118,12 +119,15 @@ export async function startGatewayServerCore(
         clearTimeout(postReadyWorkTimer);
         releasePostReadyWork();
         closePromise = (async () => {
-          // Required joins are outside best-effort teardown: failure retains the
-          // runtime rather than releasing dependencies beneath surviving work.
           await prelude;
-          await gatewayKernel.connectionWork.drain();
           await runGatewayShutdownSteps({
             steps: [
+              { name: "connection-dependent sidecars", run: stopConnectionDependentSidecars },
+              {
+                name: "received connection work",
+                run: () => gatewayKernel.connectionWork.drain(),
+                required: true,
+              },
               { name: "startup settlement", run: () => startupSettled },
               { name: "terminal sessions", run: () => terminalSessions.disposeAll() },
               { name: "gateway lifetime sidecars", run: stopRegisteredGatewayLifetimeSidecars },

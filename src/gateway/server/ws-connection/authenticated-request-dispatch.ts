@@ -70,6 +70,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     parsed: unknown,
     client: GatewayWsClient,
     frameBytes: number,
+    admission?: "continuation",
   ): Promise<void> => {
     // After handshake, accept only req frames
     if (!validateRequestFrame(parsed)) {
@@ -246,6 +247,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             extraHandlers,
             methodRegistry: getMethodRegistry?.(),
             context,
+            ...(admission ? { admission } : {}),
             ...(requestController ? { signal: requestController.signal } : {}),
           }),
         );

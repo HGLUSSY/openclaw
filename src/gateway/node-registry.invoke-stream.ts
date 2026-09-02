@@ -1,6 +1,5 @@
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
-  isGatewayRestartDraining,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
@@ -268,7 +267,7 @@ export class NodeInvokeStreamController {
     }
     // Shutdown cleanup has no request root. Its live private owner grants only
     // settlement; do not mint admission or revive a released captured root.
-    return isGatewayRestartDraining() && pending.isCompletionAuthorized ? params.run() : null;
+    return pending.isCompletionAuthorized ? params.run() : null;
   }
 
   isPending(invokeId: string, nodeId: string, connId: string): boolean {

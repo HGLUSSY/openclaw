@@ -16,9 +16,10 @@ export function resolveGatewayShutdownNotice(options?: GatewayCloseOptions) {
 type GatewayShutdownStep = {
   name: string;
   run: () => Promise<void> | void;
+  required?: true;
 };
 
-/** Run every shutdown step even when one owner fails, with the failed owner named. */
+/** Collect owner failures, but never release dependencies beyond a failed required join. */
 export async function runGatewayShutdownSteps(params: {
   steps: readonly GatewayShutdownStep[];
   onError: (message: string) => void;
@@ -31,6 +32,9 @@ export async function runGatewayShutdownSteps(params: {
       const message = `shutdown step failed (${step.name}): ${formatErrorMessage(error)}`;
       params.onError(message);
       errors.push(new Error(message, { cause: error }));
+      if (step.required) {
+        break;
+      }
     }
   }
   if (errors.length > 0) {

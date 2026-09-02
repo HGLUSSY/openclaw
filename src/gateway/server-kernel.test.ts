@@ -367,11 +367,46 @@ describe("createGatewayKernel", () => {
         .mockResolvedValue(undefined);
       kernel.kernel.setPostReadySidecars([{ stop: postReadySidecar }]);
 
+      const connectionStopError = new Error("remote worker stop failed");
+      const connectionStopEntered = createDeferred();
+      const releaseConnectionStop = createDeferred();
+      const releaseLateConnectionStop = createDeferred();
+      const connectionSidecar = {
+        stop: vi.fn<() => Promise<void>>(async () => {
+          connectionStopEntered.resolve();
+          await releaseConnectionStop.promise;
+          throw connectionStopError;
+        }),
+      };
+      kernel.registerConnectionDependentSidecars([connectionSidecar]);
+      const closeTransport = vi.fn(() => releaseConnection());
+      const releaseConnection = kernel.connectionWork.registerConnection(closeTransport);
       const closePreludeReached = vi.spyOn(kernel.watchNodeHttpRuntime, "close");
       const closing = kernel.closeOnStartupFailure();
+      void closing.catch(() => undefined);
+      await connectionStopEntered.promise;
+      const lateConnectionSidecar = { stop: vi.fn(() => releaseLateConnectionStop.promise) };
+      kernel.registerConnectionDependentSidecars([lateConnectionSidecar]);
+      const lateGeneralSidecar = { stop: vi.fn(async () => {}) };
+      const latePostReadySidecar = { stop: vi.fn(async () => {}) };
+      kernel.registerGatewayLifetimeSidecars([lateGeneralSidecar]);
+      kernel.registerPostReadySidecars([latePostReadySidecar]);
+      expect(closeTransport).not.toHaveBeenCalled();
+      releaseConnectionStop.resolve();
+      await vi.waitFor(() => expect(lateConnectionSidecar.stop).toHaveBeenCalledOnce());
+      expect(closeTransport).not.toHaveBeenCalled();
+      expect(lifetimeSidecar.stop).not.toHaveBeenCalled();
+      expect(lateGeneralSidecar.stop).not.toHaveBeenCalled();
+      expect(latePostReadySidecar.stop).not.toHaveBeenCalled();
+      releaseLateConnectionStop.resolve();
       await vi.waitFor(() => {
         expect(lifetimeSidecar.stop).toHaveBeenCalledOnce();
       });
+      expect(closeTransport).toHaveBeenCalledOnce();
+      expect(connectionSidecar.stop).toHaveBeenCalledTimes(2);
+      expect(() => kernel?.registerConnectionDependentSidecars([lateConnectionSidecar])).toThrow(
+        "cannot publish a Gateway sidecar after shutdown sealed its owner",
+      );
       const lateSidecar = { stop: vi.fn(async () => {}) };
       kernel.registerGatewayLifetimeSidecars([lifetimeSidecar, lateSidecar]);
       const lateStop = kernel.stopRegisteredGatewayLifetimeSidecars();
@@ -389,9 +424,14 @@ describe("createGatewayKernel", () => {
       const lateLifetimeSidecar = { stop: vi.fn(() => lateLifetimeStop) };
       kernel.registerGatewayLifetimeSidecars([lateLifetimeSidecar]);
       let closeSettled = false;
-      void closing.then(() => {
-        closeSettled = true;
-      });
+      void closing.then(
+        () => {
+          closeSettled = true;
+        },
+        () => {
+          closeSettled = true;
+        },
+      );
       rejectPostReadyStop(postReadyError);
       await vi.waitFor(() => {
         expect(closePreludeReached).toHaveBeenCalledOnce();
@@ -400,10 +440,21 @@ describe("createGatewayKernel", () => {
       const duringSealSidecar = { stop: vi.fn(async () => {}) };
       kernel.registerGatewayLifetimeSidecars([duringSealSidecar]);
       releaseLateLifetimeStop();
-      await expect(closing).resolves.toBeUndefined();
+      await expect(closing).rejects.toMatchObject({
+        errors: [
+          {
+            message:
+              "shutdown step failed (connection-dependent sidecars): remote worker stop failed",
+            cause: connectionStopError,
+          },
+        ],
+      });
+      connectionSidecar.stop.mockResolvedValue(undefined);
       closePreludeReached.mockRestore();
       expect(lifetimeSidecar.stop).toHaveBeenCalledTimes(2);
       expect(trailingSidecar).toHaveBeenCalledOnce();
+      expect(lateGeneralSidecar.stop).toHaveBeenCalledOnce();
+      expect(latePostReadySidecar.stop).toHaveBeenCalledOnce();
       expect(reentrantSidecar.stop).toHaveBeenCalledOnce();
       expect(lateSidecar.stop).toHaveBeenCalledOnce();
       expect(duringSealSidecar.stop).toHaveBeenCalledOnce();

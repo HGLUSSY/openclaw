@@ -29,23 +29,18 @@ export class GatewayConnectionWork extends AsyncWorkScope {
     };
   }
 
-  override beginClose(): void {
-    if (this.isClosing) {
-      return;
-    }
-    super.beginClose();
-    // Disconnect so pending node invocations and request-owned cancellation can
-    // settle. Ordinary RPCs still own their original completion promises.
+  override async drain(): Promise<void> {
+    this.beginClose();
+    // Connection-dependent owners finish their node cleanup before this boundary.
+    // Disconnect then settles ordinary invokes; their finalizers still belong to us.
     for (const close of this.connections) {
+      this.connections.delete(close);
       try {
         close();
       } catch (error) {
         this.failure ??= { error };
       }
     }
-  }
-
-  override async drain(): Promise<void> {
     await super.drain();
     if (this.failure) {
       throw new Error("Gateway connection work failed to close cleanly", {

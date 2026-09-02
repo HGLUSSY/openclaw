@@ -4,6 +4,7 @@ import path from "node:path";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { gatewayFixtureLifetime } from "../gateway-fixture-lifetime.test-support.js";
 import type { GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import { installGatewayTestHooks } from "../test-helpers.server.js";
 
@@ -36,13 +37,15 @@ export function installGatewaySessionsTestResources(
     cleanup: () =>
       runQaGatewayFixture(
         async () => {
-          const acquiredHarness = harness;
-          harness = undefined;
-          await acquiredHarness?.close();
+          await harness?.close();
         },
         () => {
-          sharedSessionStoreDir = undefined;
+          if (harness && !gatewayFixtureLifetime.canReleaseState(harness.server)) {
+            return;
+          }
           tempDirs.cleanup();
+          sharedSessionStoreDir = undefined;
+          harness = undefined;
         },
       ),
   });

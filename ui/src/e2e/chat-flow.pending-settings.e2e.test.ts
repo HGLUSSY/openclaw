@@ -99,9 +99,7 @@ suite.define(() => {
       await suite.closeBrowserContext(context);
     }
   });
-});
 
-suite.define(() => {
   it("dispatches after its settings refresh while a later roster refresh is still pending", async () => {
     const context = await suite.newBrowserContext({
       ...(captureUiProofEnabled

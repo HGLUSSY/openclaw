@@ -396,10 +396,9 @@ export async function prepareGatewayLifecycle(params: {
     healthWork.beginClose();
     broadcast("shutdown", resolveGatewayShutdownNotice(options));
     runtime.connectionWork.beginClose();
-    postReadySidecarStopOwner.beginClose();
-    gatewayLifetimeSidecarStopOwner.beginClose();
-    // Fence background owners before any awaited close step can tear down the
-    // plugin/channel or shared-state runtime they still need.
+    connectionDependentSidecarStopOwner.beginClose();
+    // Keep late general sidecars owned until received work drains. Fence background
+    // producers now, before their plugin/channel and shared-state dependencies can close.
     void stopOutboundDeliveryRecoveryForClose();
     void stopMediaCleanupForClose();
     runtimeState.stopGatewayUpdateCheck();
@@ -474,6 +473,21 @@ export async function prepareGatewayLifecycle(params: {
         getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
       }),
     );
+  };
+  let connectionDependentSidecars: typeof runtimeState.gatewayLifetimeSidecars = [];
+  const connectionDependentSidecarStopOwner = createGatewaySidecarStopOwner({
+    getRegistered: () => connectionDependentSidecars,
+    setRegistered: (sidecars) => {
+      connectionDependentSidecars = sidecars;
+    },
+  });
+  const stopConnectionDependentSidecars = async () => {
+    try {
+      await connectionDependentSidecarStopOwner.stop();
+    } finally {
+      // Acquisition publishes before yielding; seal its late cleanup before transport closes.
+      await connectionDependentSidecarStopOwner.sealAndJoin();
+    }
   };
   const postReadySidecarStopOwner = createGatewaySidecarStopOwner({
     getRegistered: () => runtimeState.postReadySidecars,
@@ -565,9 +579,14 @@ export async function prepareGatewayLifecycle(params: {
   };
   const closeOnStartupFailure = async () => {
     await beginClosePrelude({ reason: "gateway startup failed" });
-    await runtime.connectionWork.drain();
     await runGatewayShutdownSteps({
       steps: [
+        { name: "connection-dependent sidecars", run: stopConnectionDependentSidecars },
+        {
+          name: "received connection work",
+          run: () => runtime.connectionWork.drain(),
+          required: true,
+        },
         { name: "gateway lifetime sidecars", run: stopRegisteredGatewayLifetimeSidecars },
         { name: "post-ready sidecars", run: stopRegisteredPostReadySidecars },
         { name: "gateway close prelude", run: runClosePrelude },
@@ -641,6 +660,15 @@ export async function prepareGatewayLifecycle(params: {
     refreshGatewayHealthSnapshotWithRuntime,
     stopRegisteredPostReadySidecars,
     stopRegisteredGatewayLifetimeSidecars,
+    stopConnectionDependentSidecars,
+    registerConnectionDependentSidecars: connectionDependentSidecarStopOwner.publish,
+    unregisterConnectionDependentSidecar: (
+      sidecar: (typeof connectionDependentSidecars)[number],
+    ) => {
+      connectionDependentSidecars = connectionDependentSidecars.filter(
+        (registered) => registered !== sidecar,
+      );
+    },
     registerPostReadySidecars: postReadySidecarStopOwner.publish,
     registerGatewayLifetimeSidecars: gatewayLifetimeSidecarStopOwner.publish,
     sealAndJoinRegisteredSidecarStops,
