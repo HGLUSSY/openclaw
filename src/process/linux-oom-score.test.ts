@@ -281,48 +281,51 @@ describe("prepareOomScoreAdjustedSpawnPreservingExecEnv", () => {
     });
   });
 
-  it("restores exact values only for the final executable", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oom-env-"));
-    const bashEnvPath = path.join(tempDir, "bash-env.sh");
-    const startupMarkerPath = path.join(tempDir, "wrapper-startup-marker");
-    fs.writeFileSync(bashEnvPath, `printf touched > "${startupMarkerPath}"\n`);
-    try {
-      const prepared = prepareOomScoreAdjustedSpawnPreservingExecEnv(
-        process.execPath,
-        [
-          "-e",
-          `process.stdout.write(JSON.stringify({bashEnv:process.env.BASH_ENV,envPresent:Object.hasOwn(process.env,"ENV"),env:process.env.ENV,cdpath:process.env.CDPATH,ps4:process.env.PS4,carrierKeys:Object.keys(process.env).filter(key=>key.startsWith("OC_INTERNAL_OOM_EXEC_"))}))`,
-        ],
-        {
-          ...linux,
-          env: {
-            PATH: process.env.PATH,
-            BASH_ENV: bashEnvPath,
-            ENV: "",
-            CDPATH: "line1\nline2",
-            PS4: "final-trace-prefix",
+  it.runIf(process.platform !== "win32")(
+    "restores exact values only for the final executable",
+    () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oom-env-"));
+      const bashEnvPath = path.join(tempDir, "bash-env.sh");
+      const startupMarkerPath = path.join(tempDir, "wrapper-startup-marker");
+      fs.writeFileSync(bashEnvPath, `printf touched > "${startupMarkerPath}"\n`);
+      try {
+        const prepared = prepareOomScoreAdjustedSpawnPreservingExecEnv(
+          process.execPath,
+          [
+            "-e",
+            `process.stdout.write(JSON.stringify({bashEnv:process.env.BASH_ENV,envPresent:Object.hasOwn(process.env,"ENV"),env:process.env.ENV,cdpath:process.env.CDPATH,ps4:process.env.PS4,carrierKeys:Object.keys(process.env).filter(key=>key.startsWith("OC_INTERNAL_OOM_EXEC_"))}))`,
+          ],
+          {
+            ...linux,
+            env: {
+              PATH: process.env.PATH,
+              BASH_ENV: bashEnvPath,
+              ENV: "",
+              CDPATH: "line1\nline2",
+              PS4: "final-trace-prefix",
+            },
           },
-        },
-      );
-      const child = spawnSync(prepared.command, prepared.args, {
-        env: prepared.env,
-        encoding: "utf8",
-      });
+        );
+        const child = spawnSync(prepared.command, prepared.args, {
+          env: prepared.env,
+          encoding: "utf8",
+        });
 
-      expect(child.status).toBe(0);
-      expect(JSON.parse(child.stdout)).toEqual({
-        bashEnv: bashEnvPath,
-        envPresent: true,
-        env: "",
-        cdpath: "line1\nline2",
-        ps4: "final-trace-prefix",
-        carrierKeys: [],
-      });
-      expect(fs.existsSync(startupMarkerPath)).toBe(false);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
+        expect(child.status).toBe(0);
+        expect(JSON.parse(child.stdout)).toEqual({
+          bashEnv: bashEnvPath,
+          envPresent: true,
+          env: "",
+          cdpath: "line1\nline2",
+          ps4: "final-trace-prefix",
+          carrierKeys: [],
+        });
+        expect(fs.existsSync(startupMarkerPath)).toBe(false);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.runIf(bashAvailable)(
     "does not expose preserving carriers to Bash-as-sh xtrace startup",
