@@ -1364,17 +1364,19 @@ class TalkModeManagerTest {
   @Config(shadows = [PlayoutAudioTrack::class])
   fun lateFinalUserTranscriptKeepsTheAnsweredUtteranceStatus() =
     runBlocking {
-      for (mode in listOf("consult-audio", "stopped-audio", "cleared-audio", "active-audio", "drained-audio", "local-replay")) {
+      for ((mode, earlyPartial) in listOf("consult-audio", "stopped-audio", "cleared-audio", "active-audio", "drained-audio", "local-replay").flatMap { mode -> listOf(mode to true, mode to false) }) {
         PlayoutAudioTrack.reset()
         try {
           withRealtimePlayback(responseForRequest = { request, _ ->
             if (request.getValue("method").jsonPrimitive.content == "talk.client.toolCall") """{"runId":"consult-run"}""" else null
           }) { proof ->
-            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Can you tack","final":false,"talkEvent":{"turnId":"active-turn"}}""")
-            val userId =
+            if (earlyPartial) {
+              proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Can you tack","final":false,"talkEvent":{"turnId":"active-turn"}}""")
+            }
+            val partialUserId =
               proof.manager.conversation.value
-                .single()
-                .id
+                .singleOrNull()
+                ?.id
             if (mode == "consult-audio") {
               proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"toolCall","callId":"consult-call","name":"openclaw_agent_consult","args":{"question":"Synthetic question"}}""")
               withTimeout(5_000) {
@@ -1409,19 +1411,13 @@ class TalkModeManagerTest {
               assertFalse(proof.manager.isSpeaking.value)
             }
             proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Can you check?","final":true,"talkEvent":{"turnId":"active-turn"}}""")
-            assertEquals(
-              userId,
+            val userEntry =
               proof.manager.conversation.value
-                .first()
-                .id,
-            )
-            assertEquals(
-              "Can you check?",
-              proof.manager.conversation.value
-                .first()
-                .text,
-            )
-            assertFalse("Finalizing the already answered user utterance cannot restart Thinking", proof.manager.awaitingAgent.value)
+                .single { it.role == VoiceConversationRole.User }
+            if (earlyPartial) assertEquals(partialUserId, userEntry.id)
+            val userId = userEntry.id
+            assertEquals("Can you check?", userEntry.text)
+            assertFalse("Finalizing the already answered user utterance cannot restart Thinking ($mode, earlyPartial=$earlyPartial)", proof.manager.awaitingAgent.value)
             proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Checking","final":true,"talkEvent":{"turnId":"active-turn"}}""")
             PlayoutAudioTrack.timestampFrames = 2_400L
             proof.scheduler.advanceTimeBy(20)

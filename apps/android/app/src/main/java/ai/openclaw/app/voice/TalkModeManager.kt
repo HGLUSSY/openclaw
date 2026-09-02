@@ -132,11 +132,15 @@ private enum class TalkStatusState {
   TalkFailure,
 }
 
+private class TalkStatusOwner(
+  var entryId: String? = null,
+)
+
 private data class TalkStatus(
   val text: NativeText,
   val state: TalkStatusState,
   val awaitingAgent: Boolean = false,
-  val owner: Any = Any(),
+  val owner: TalkStatusOwner = TalkStatusOwner(),
 )
 
 private class PushToTalkAudioSource(
@@ -382,7 +386,7 @@ class TalkModeManager internal constructor(
 
   private data class RealtimeOutputTurn(
     val id: String?,
-    val statusOwner: Any,
+    val statusOwner: TalkStatusOwner,
   )
 
   @Volatile private var realtimeOutputTurn: RealtimeOutputTurn? = null
@@ -1414,7 +1418,7 @@ class TalkModeManager internal constructor(
       (!realtimePlayoutDelegate.isInitialized() || !realtimePlayout.isPlaying || realtimeAudioInput?.canCaptureDuringPlayback == true)
 
   // Gateway output turn IDs retain their status origin across overlapping user transcripts.
-  private fun realtimeOutputStatusOwner(turnId: String?): Any {
+  private fun realtimeOutputStatusOwner(turnId: String?): TalkStatusOwner {
     // Local transcript replay is unkeyed but still owns the user entry it answered.
     val output = realtimeOutputTurn
     if (!turnId.isNullOrBlank() && output?.id == turnId) return output.statusOwner
@@ -1828,14 +1832,17 @@ class TalkModeManager internal constructor(
       }
     when (role) {
       VoiceConversationRole.User -> {
-        // Transcription can finish after the answer; only a new utterance claims a new status owner.
-        if (entryId == null || (isFinal && realtimeOutputTurn?.statusOwner !== resolvedEntryId)) {
+        // The first transcript may follow output. Bind its entry without replacing the
+        // identity already queued for playback; a distinct entry still gets a new owner.
+        val statusOwner = currentStatus.owner.takeIf { it.entryId == null || it.entryId == resolvedEntryId } ?: TalkStatusOwner()
+        statusOwner.entryId = resolvedEntryId
+        if ((entryId == null || isFinal) && realtimeOutputTurn?.statusOwner !== statusOwner) {
           setStatus(
             TalkStatus(
               text = if (isFinal) nativeText("Thinking…") else nativeText("Listening"),
               state = TalkStatusState.Active,
               awaitingAgent = isFinal,
-              owner = resolvedEntryId,
+              owner = statusOwner,
             ),
           )
         }
@@ -2850,6 +2857,7 @@ class TalkModeManager internal constructor(
       val output = realtimeOutputTurn
       realtimeOutputSuppressed = true
       stopRealtimePlayback()
+      setStatus(currentStatus.copy(text = nativeText("Listening"), state = TalkStatusState.Active, awaitingAgent = false))
       if (sessionId != null && output?.id != null) {
         scope.launch {
           cancelRealtimeOutput(
@@ -2863,7 +2871,6 @@ class TalkModeManager internal constructor(
       }
     }
     stopSpeaking(resetInterrupt = true)
-    setStatus(nativeText("Listening"))
   }
 
   private suspend fun cancelRealtimeOutput(

@@ -657,6 +657,13 @@ export async function tryDispatchAcpReplyCore(params: {
   let runtimeTurnWasCancelled = false;
   let assistantTranscript: ReplyDispatchAssistantTranscript | undefined;
   let terminalOutcome: ReturnType<ReplyDispatchRun["getResult"]>["terminalOutcome"];
+  let auditEndFields: ReturnType<typeof auditRuntime.resolveAcpLifecycleEndFields> | undefined;
+  const resolveAuditEndFields = () =>
+    (auditEndFields ??= auditRuntime.resolveAcpLifecycleEndFields(
+      params.abortSignal,
+      auditStopReason,
+      auditResultStatus,
+    ));
   const emitAuditStart = () => {
     if (auditStarted) {
       return;
@@ -689,9 +696,7 @@ export async function tryDispatchAcpReplyCore(params: {
       toolTracker: auditToolTracker,
       sessionKey: canonicalSessionKey,
       agentId: acpAgentId,
-      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-      ...(auditStopReason ? { stopReason: auditStopReason } : {}),
-      ...(auditResultStatus ? { resultStatus: auditResultStatus } : {}),
+      endFields: resolveAuditEndFields(),
       auditOnly,
       completionSource,
     });
@@ -728,6 +733,11 @@ export async function tryDispatchAcpReplyCore(params: {
       return;
     }
     transcriptPersistenceAttempted = true;
+    // Capture before any persistence await so a later abort cannot rewrite the completed execution.
+    terminalOutcome ??= buildAgentRunTerminalOutcomeFromLifecycleEvent({
+      phase: "end",
+      data: resolveAuditEndFields(),
+    });
     const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
     assistantTranscript = await persistAcpDispatchTranscript({
       cfg: params.cfg,
@@ -736,17 +746,7 @@ export async function tryDispatchAcpReplyCore(params: {
       expectedSessionId: transcriptSessionId,
       promptText: transcriptPromptText,
       finalText,
-      // Persistence precedes the end event; retain the same normalized outcome without publishing early.
-      terminalOutcome:
-        terminalOutcome ??
-        buildAgentRunTerminalOutcomeFromLifecycleEvent({
-          phase: "end",
-          data: auditRuntime.resolveAcpLifecycleEndFields(
-            params.abortSignal,
-            auditStopReason,
-            auditResultStatus,
-          ),
-        }),
+      terminalOutcome,
       meta: acpResolution.kind === "ready" ? acpResolution.meta : undefined,
       threadId: params.ctx.MessageThreadId,
       userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,

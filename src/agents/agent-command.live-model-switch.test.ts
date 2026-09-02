@@ -5119,7 +5119,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           data: expect.objectContaining({
             phase: "error",
             error: "All fallback candidates ended incomplete",
-            fallbackExhaustedFailure: true,
+            executionSettled: true,
           }),
         }),
       ]),
@@ -5182,6 +5182,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           data: expect.objectContaining({
             phase: "error",
             error: "Command may have changed state",
+            executionSettled: true,
             replayInvalid: true,
           }),
         }),
@@ -5513,7 +5514,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
 
     expect(state.emitAcpLifecycleEndMock).toHaveBeenCalledWith(
-      expect.objectContaining({ resultStatus: "cancelled", stopReason: undefined }),
+      expect.objectContaining({
+        endFields: { aborted: true, stopReason: "stop", status: "cancelled" },
+      }),
     );
     expect(state.buildAcpResultMock).toHaveBeenCalledWith(
       expect.objectContaining({ resultStatus: "cancelled", stopReason: undefined }),

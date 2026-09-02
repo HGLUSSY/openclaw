@@ -1777,6 +1777,7 @@ function emitAcpTerminalLifecycle(
 ) {
   const data = {
     ...terminal,
+    executionSettled: true,
     ...(params.completionSource ? { completionSource: params.completionSource } : {}),
   };
   const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
@@ -1801,9 +1802,7 @@ export function emitAcpLifecycleEnd(params: {
   sessionKey?: string;
   agentId?: string;
   lifecycleGeneration?: string;
-  abortSignal?: AbortSignal;
-  stopReason?: string;
-  resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
+  endFields: ReturnType<typeof resolveAcpLifecycleEndFields>;
   terminalReply?: AgentRunTerminalReplySnapshot;
   auditOnly?: boolean;
   completionSource?: "reply-dispatch";
@@ -1811,17 +1810,16 @@ export function emitAcpLifecycleEnd(params: {
   finalizeAcpToolsForRun(
     params.toolTracker,
     params.runId,
-    resolveAcpToolTerminalReason(
-      params.abortSignal,
-      params.stopReason,
-      undefined,
-      params.resultStatus,
-    ),
+    params.endFields.stopReason === "timeout"
+      ? "timed_out"
+      : params.endFields.aborted
+        ? "cancelled"
+        : "failed",
   );
   return emitAcpTerminalLifecycle(params, {
     phase: "end",
     endedAt: Date.now(),
-    ...resolveAcpLifecycleEndFields(params.abortSignal, params.stopReason, params.resultStatus),
+    ...params.endFields,
     ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
   });
 }
