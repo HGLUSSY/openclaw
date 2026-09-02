@@ -345,7 +345,11 @@ device_count() {
 running_avd_name() {
   local adb="$1"
   local serial="$2"
-  "$adb" -s "$serial" emu avd name 2>/dev/null | tr -d '\r' | sed -n '1p'
+  local output
+  if ! output="$("$adb" -s "$serial" emu avd name 2>/dev/null)"; then
+    return 0
+  fi
+  printf '%s\n' "$output" | tr -d '\r' | sed -n '1p'
 }
 
 wait_for_single_device() {
