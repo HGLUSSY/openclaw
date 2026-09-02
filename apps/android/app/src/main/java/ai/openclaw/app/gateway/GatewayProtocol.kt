@@ -894,6 +894,7 @@ enum class GatewayMethod(
   SessionsGithubOptions("sessions.github.options"),
   SessionsGithubStatus("sessions.github.status"),
   SessionsGithubConfirm("sessions.github.confirm"),
+  SessionsTitlePrepare("sessions.title.prepare"),
   UsersMentionable("users.mentionable"),
   MentionsList("mentions.list"),
   MentionsDismiss("mentions.dismiss"),

@@ -131,7 +131,9 @@ describe("DraftSubmissionFlow", () => {
   });
 
   it("replays a frozen direct create without inheriting refreshed placement or mutable submit gates", async () => {
+    const takePreparedTitle = vi.fn(() => "Original prepared title");
     const { context, flow, place } = createDraftFixture({
+      takePreparedTitle,
       methods: ["sessions.create", "sessions.dispatch"],
       scopes: ["operator.admin", "operator.read", "operator.write"],
     });
@@ -153,11 +155,15 @@ describe("DraftSubmissionFlow", () => {
     const initialSubmission = flow.submit();
     await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledOnce());
     const originalParams = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
-    expect(originalParams?.mentions).toEqual([{ profileId: "profile-original", start: 0, end: 5 }]);
+    expect(originalParams).toMatchObject({
+      displayName: "Original prepared title",
+      mentions: [{ profileId: "profile-original", start: 0, end: 5 }],
+    });
     expect(flow.pendingMessage?.["__openclaw"].humanMentions).toEqual([
       { profileId: "profile-original", start: 0, end: 5 },
     ]);
     flow.invalidate("gateway-changed");
+    takePreparedTitle.mockReturnValue("Replacement prepared title");
     flow.setMessage("@Alex a different draft", [
       { profileId: "profile-replacement", start: 0, end: 5 },
     ]);
@@ -768,6 +774,7 @@ describe("DraftSubmissionFlow", () => {
           sessionKey: "",
           hello: {
             auth: {
+              recoveryScope: client.recoveryScope,
               role: "operator",
               scopes: ["operator.admin", "operator.read", "operator.write"],
             },

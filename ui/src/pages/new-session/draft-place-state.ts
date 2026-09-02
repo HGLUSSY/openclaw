@@ -97,6 +97,7 @@ export class DraftPlaceState {
       agentId: this.agentId,
       message: params.message,
       mentions: params.mentions,
+      displayName: params.displayName,
       model: this.modelControl.selected,
       contextWindow: this.modelControl.contextWindow,
       thinkingLevel: this.modelControl.thinkingLevel,
