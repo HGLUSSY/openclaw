@@ -71,7 +71,7 @@ describe("android screenshots script", () => {
     }
   });
 
-  it("reports the screenshot AVD mismatch when a physical device is connected", () => {
+  it("rejects a physical device selected during screenshot discovery", () => {
     const root = tempDirs.make("openclaw-android-screenshot-adb-");
     const adb = path.join(root, "adb");
     writeFileSync(
@@ -83,6 +83,10 @@ if [[ "$1" == "devices" ]]; then
 fi
 if [[ "$1" == "-s" && "$2" == "physical-serial" && "$3" == "emu" && "$4" == "avd" && "$5" == "name" ]]; then
   exit 1
+fi
+if [[ "$1" == "-s" && "$2" == "physical-serial" && "$3" == "shell" && "$4" == "getprop" && "$5" == "ro.kernel.qemu" ]]; then
+  printf '0\\n'
+  exit 0
 fi
 printf 'unexpected adb invocation: %s\\n' "$*" >&2
 exit 97
@@ -98,9 +102,10 @@ exit 97
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
-      "Connected emulator 'unknown' is not the screenshot AVD 'OpenClaw_Screenshots_API36'.",
+      "Android screenshot capture requires an emulator; 'physical-serial' is not an emulator.",
     );
-    expect(result.stderr).toContain("pass --device 'physical-serial'");
+    expect(result.stderr).toContain("Pass --avd <name> or --device <emulator-serial>.");
+    expect(result.stderr).not.toContain("Connected emulator 'unknown'");
     expect(result.stderr).not.toContain("unexpected adb invocation");
   });
 
