@@ -357,6 +357,9 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     } else {
       selected = catalogRegistrations.providers;
     }
+    const providerVisibilities = new Map(
+      selected.map((provider) => [provider.id, provider.visibility]),
+    );
     const config = context.getRuntimeConfig();
     const resolvedAgent = resolveAgentIdOrRespondError({
       rawAgentId: request.agentId,
@@ -383,10 +386,15 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           ...catalog,
           hosts: catalog.hosts.map((host) =>
             filterSessionCatalogHost(
-              requestEntries.projectHostSessions(host, result.instances),
+              requestEntries.projectHostSessions(
+                host,
+                result.instances,
+                providerVisibilities.get(catalog.id),
+              ),
               visibility,
               {
                 requestEntries,
+                providerVisibility: providerVisibilities.get(catalog.id),
               },
             ),
           ),
