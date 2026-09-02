@@ -360,7 +360,7 @@ export class DraftGatewayState {
       this.catalogRetryingValue ||
       !this.gatewayConnectedValue ||
       (data?.group && context?.sessions.groupsStatus() === "loading") ||
-      !catalog.isRoutePending(data, context?.sessions)
+      (!data?.startTerminal && !catalog.isRoutePending(data, context?.sessions))
     ) {
       return;
     }

@@ -133,11 +133,8 @@ export function renderNewSessionDraftComposer(options: {
   dictationActive?: boolean;
   dictationPreview?: string;
   dictationStatus?: TemplateResult | typeof nothing;
-  terminalAction?: {
-    canStart: boolean;
-    disabledReason?: string;
-    onStart: () => void;
-  };
+  nativeTerminal?: boolean;
+  onUnsupportedAttachment?: () => void;
   submitting: boolean;
   messageLocked?: boolean;
   onInput: (message: string) => void;
@@ -147,7 +144,9 @@ export function renderNewSessionDraftComposer(options: {
   onBackgroundSubmit?: () => void;
 }) {
   const readSignal = options.attachmentDraft.readSignal;
-  const commandClient = options.context?.gateway.snapshot.client ?? null;
+  const commandClient = options.nativeTerminal
+    ? null
+    : (options.context?.gateway.snapshot.client ?? null);
   options.textareaController.syncSkillCommandOwner(
     commandClient,
     options.agentId,
@@ -194,7 +193,8 @@ export function renderNewSessionDraftComposer(options: {
     dictationActive: options.dictationActive,
     dictationPreview: options.dictationPreview,
     dictationStatus: options.dictationStatus,
-    terminalAction: options.terminalAction,
+    nativeTerminal: options.nativeTerminal,
+    onUnsupportedAttachment: options.onUnsupportedAttachment,
     submitting: options.submitting,
     textareaController: options.textareaController,
     voiceControl: options.voiceControl,
