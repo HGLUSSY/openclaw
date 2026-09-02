@@ -1,5 +1,8 @@
+import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
+  captureControlUiE2eFailureDiagnostics,
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
@@ -21,59 +24,79 @@ const boardSnapshot = {
 
 suite.define(() => {
   it("restores the previously selected side-panel tab", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
-    const page = await context.newPage();
-    const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-    await page.addInitScript(
-      ({ key, storageKey }) => {
-        const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
-          string,
-          unknown
-        >;
-        settings.boardSessionViews = { [key]: { activeTabId: "main" } };
-        const sidebarSessionLayouts =
-          settings.sidebarSessionLayouts && typeof settings.sidebarSessionLayouts === "object"
-            ? (settings.sidebarSessionLayouts as Record<string, unknown>)
-            : {};
-        settings.sidebarSessionLayouts = {
-          ...sidebarSessionLayouts,
-          [key]: sidebarSessionLayouts[key] ?? {
-            columns: [
-              {
-                id: "side-panel-column",
-                side: "right",
-                panels: [{ id: "terminal", slot: "terminal" }],
-                activePanelId: "terminal",
-                height: 360,
-                width: 480,
-              },
-            ],
-            dock: "right",
-            open: true,
-          },
-        };
-        localStorage.setItem(storageKey, JSON.stringify(settings));
-      },
-      { key: sessionKey, storageKey: settingsKey },
+    const artifactDir = createControlUiE2eArtifactDir(
+      "dashboard-side-panel-reload",
+      process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR,
     );
-    await installMockGateway(page, {
-      sessionKey,
-      featureMethods: ["board.get", "chat.metadata", "chat.startup", "terminal.open"],
-      methodResponses: { "board.get": boardSnapshot },
-      terminalEnabled: true,
+    const context = await suite.browser.newContext({
+      viewport: { height: 900, width: 1280 },
+      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
     });
-
     try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
-      await page.locator(".board-session-surface").waitFor();
-      const terminal = page.getByRole("tab", { name: "Terminal", exact: true });
-      const chat = page.getByRole("tab", { name: "Board chat", exact: true });
-      await expect.poll(() => terminal.getAttribute("aria-selected")).toBe("true");
+      await context.tracing.start({ screenshots: true, snapshots: true });
+      try {
+        const page = await context.newPage();
+        const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+        await page.addInitScript(
+          ({ key, storageKey }) => {
+            const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
+              string,
+              unknown
+            >;
+            settings.boardSessionViews = { [key]: { activeTabId: "main" } };
+            const sidebarSessionLayouts =
+              settings.sidebarSessionLayouts && typeof settings.sidebarSessionLayouts === "object"
+                ? (settings.sidebarSessionLayouts as Record<string, unknown>)
+                : {};
+            settings.sidebarSessionLayouts = {
+              ...sidebarSessionLayouts,
+              [key]: sidebarSessionLayouts[key] ?? {
+                columns: [
+                  {
+                    id: "side-panel-column",
+                    side: "right",
+                    panels: [{ id: "terminal", slot: "terminal" }],
+                    activePanelId: "terminal",
+                    height: 360,
+                    width: 480,
+                  },
+                ],
+                dock: "right",
+                open: true,
+              },
+            };
+            localStorage.setItem(storageKey, JSON.stringify(settings));
+          },
+          { key: sessionKey, storageKey: settingsKey },
+        );
+        await installMockGateway(page, {
+          sessionKey,
+          featureMethods: ["board.get", "chat.metadata", "chat.startup", "terminal.open"],
+          methodResponses: { "board.get": boardSnapshot },
+          terminalEnabled: true,
+        });
 
-      await chat.click();
-      await expect.poll(() => chat.getAttribute("aria-selected")).toBe("true");
-      await page.reload();
-      await expect.poll(() => chat.getAttribute("aria-selected")).toBe("true");
+        try {
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
+          await page.locator(".board-session-surface").waitFor();
+          const terminal = page.getByRole("tab", { name: "Terminal", exact: true });
+          const chat = page.getByRole("tab", { name: "Board chat", exact: true });
+          await expect.poll(() => terminal.getAttribute("aria-selected")).toBe("true");
+
+          await chat.click();
+          await expect.poll(() => chat.getAttribute("aria-selected")).toBe("true");
+          await page.reload();
+          await expect.poll(() => chat.getAttribute("aria-selected")).toBe("true");
+        } catch (error) {
+          await captureControlUiE2eFailureDiagnostics(page, {
+            error: error instanceof Error ? error : new Error(String(error)),
+            label: "Dashboard side-panel reload",
+          });
+          throw error;
+        }
+      } finally {
+        await context.tracing.stop({ path: path.join(artifactDir, "reload-trace.zip") });
+      }
     } finally {
       await context.close();
     }
