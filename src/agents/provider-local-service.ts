@@ -24,7 +24,7 @@ import {
   signalChildProcessTree,
   shouldDetachChildForProcessTree,
 } from "../process/child-process-tree.js";
-import { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
+import { prepareOomScoreAdjustedSpawnPreservingExecEnv as prepareLocalServiceSpawn } from "../process/linux-oom-score.js";
 import { setManagedProviderLocalServicesActive } from "./provider-runtime-lifecycle.js";
 import { unwrapHeadersInitSentinelsForProviderEgress } from "./provider-secret-egress.js";
 
@@ -426,7 +426,7 @@ async function startAndWaitForLocalService(params: {
   throwIfAborted(signal);
   log.info(`starting ${provider} local service: ${service.command}`);
   const serviceEnv = service.env ? mergeProcessEnv([process.env, service.env]) : process.env;
-  const preparedSpawn = prepareOomScoreAdjustedSpawn(service.command, service.args ?? [], {
+  const preparedSpawn = prepareLocalServiceSpawn(service.command, service.args ?? [], {
     env: serviceEnv,
   });
   managed.process = spawn(preparedSpawn.command, preparedSpawn.args, {
