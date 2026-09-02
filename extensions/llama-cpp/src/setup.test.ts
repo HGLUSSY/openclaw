@@ -266,6 +266,7 @@ describe("llama.cpp managed setup", () => {
     ).toHaveLength(1);
     expect(mocks.prepareServer).toHaveBeenCalledWith({
       chatModel: { mode: "remove" },
+      configuredChatModelIds: [],
       embeddingModelIsDefault: true,
       embeddingModelPath: path.join(tempRoot, "embedding.gguf"),
       port: undefined,

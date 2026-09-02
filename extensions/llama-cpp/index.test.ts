@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   ensureModel: vi.fn(),
   ensureChat: vi.fn(),
   prepareServer: vi.fn(),
+  reconcileServer: vi.fn(),
   inspectRuntime: vi.fn(),
   genericCreate: vi.fn(),
 }));
@@ -36,6 +37,7 @@ vi.mock("./src/managed-server.js", async (importOriginal) => ({
   ensureLlamaCppModel: mocks.ensureModel,
   ensureManagedLlamaServerForChat: mocks.ensureChat,
   prepareManagedLlamaServer: mocks.prepareServer,
+  reconcileManagedLlamaServer: mocks.reconcileServer,
   inspectLlamaServerRuntime: mocks.inspectRuntime,
 }));
 
@@ -167,6 +169,7 @@ describe("llama.cpp provider plugin", () => {
         label: "llama.cpp",
         normalizeToolSchemas: expect.any(Function),
         inspectToolSchemas: expect.any(Function),
+        reconcileLocalService: mocks.reconcileServer,
         auth: expect.arrayContaining([
           expect.objectContaining({ id: "local" }),
           expect.objectContaining({ id: "existing-server" }),
@@ -311,6 +314,48 @@ describe("llama.cpp provider plugin", () => {
       provider: "local",
       model: "/models/custom-embedding.gguf",
     });
+  });
+
+  it("reapplies embedding A to B to A and injects preset reconciliation", async () => {
+    const acquireLocalService = vi.fn(async () => ({ release: vi.fn() }));
+    const options = Object.assign(configuredOptions(), { acquireLocalService });
+    const provider = options.config.models.providers[LLAMA_CPP_PROVIDER_ID];
+    provider.baseUrl = "http://127.0.0.1:29434/v1";
+    provider.params = { modelCacheDir: "/models/embedding-transition-cache" };
+    mocks.ensureModel.mockImplementation(async ({ source }) => source);
+    await llamaCppEmbeddingProviderAdapter.create({
+      ...options,
+      local: { modelPath: "/models/first-embedding.gguf" },
+    });
+    await llamaCppEmbeddingProviderAdapter.create({
+      ...options,
+      local: { modelPath: "/models/second-embedding.gguf" },
+    });
+    await llamaCppEmbeddingProviderAdapter.create({
+      ...options,
+      local: { modelPath: "/models/first-embedding.gguf" },
+    });
+    expect(mocks.prepareServer).toHaveBeenCalledTimes(3);
+    expect(mocks.prepareServer.mock.calls.map(([call]) => call.embeddingModelPath)).toEqual([
+      "/models/first-embedding.gguf",
+      "/models/second-embedding.gguf",
+      "/models/first-embedding.gguf",
+    ]);
+    const forwarded = mocks.genericCreate.mock.calls[0]?.[0] as {
+      acquireLocalService?: (
+        target: { providerId: string; baseUrl: string },
+        signal?: AbortSignal,
+      ) => Promise<unknown>;
+    };
+    const target = {
+      providerId: LLAMA_CPP_PROVIDER_ID,
+      baseUrl: "http://127.0.0.1:19432/v1",
+    };
+    await forwarded.acquireLocalService?.(target);
+    expect(acquireLocalService).toHaveBeenCalledWith(
+      { ...target, reconcile: mocks.reconcileServer },
+      undefined,
+    );
   });
 
   it.each([

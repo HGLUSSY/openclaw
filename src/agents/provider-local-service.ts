@@ -18,6 +18,8 @@ import { mergeProcessEnv } from "../infra/process-env.js";
 import type { Model } from "../llm/types.js";
 import { isSensitiveFieldKey, redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
+import type { ProviderReconcileLocalServiceContext } from "../plugins/provider-transport.types.js";
 import {
   forceKillChildProcessTree,
   isChildProcessTreeAlive,
@@ -77,6 +79,7 @@ export type ProviderLocalServiceTarget = {
   baseUrl: string;
   headers?: HeadersInit;
   service?: ModelProviderLocalServiceConfig;
+  reconcile?: (ctx: ProviderReconcileLocalServiceContext) => Promise<void>;
 };
 
 /** Configured provider endpoint whose host-owned local service may be leased. */
@@ -203,12 +206,14 @@ export async function ensureModelProviderLocalService(
   signal?: AbortSignal | null,
 ): Promise<ProviderLocalServiceLease | undefined> {
   const service = getModelProviderLocalService(model);
+  const reconcile = getModelProviderRuntimePluginHandle(model)?.plugin?.reconcileLocalService;
   return await ensureProviderLocalService(
     {
       providerId: model.provider,
       baseUrl: model.baseUrl,
       headers: buildHealthProbeHeaders((model as { headers?: HeadersInit }).headers, probeHeaders),
       service,
+      ...(reconcile ? { reconcile } : {}),
     },
     signal,
   );
@@ -216,6 +221,23 @@ export async function ensureModelProviderLocalService(
 
 /** Ensure a provider endpoint's local service is healthy and return a request lease. */
 export async function ensureProviderLocalService(
+  target: ProviderLocalServiceTarget,
+  signal?: AbortSignal | null,
+): Promise<ProviderLocalServiceLease | undefined> {
+  const lease = await acquireProviderLocalService(target, signal);
+  if (!lease || !target.reconcile) {
+    return lease;
+  }
+  await target
+    .reconcile({ baseUrl: target.baseUrl, signal: signal ?? undefined })
+    .catch((error: unknown) => {
+      lease.release();
+      throw error;
+    });
+  return lease;
+}
+
+async function acquireProviderLocalService(
   target: ProviderLocalServiceTarget,
   signal?: AbortSignal | null,
 ): Promise<ProviderLocalServiceLease | undefined> {
@@ -273,11 +295,14 @@ export async function ensureProviderLocalService(
       });
     }
     await waitForAbort(managed.starting, signal);
-    if (!managed.process || hasLocalServiceProcessExited(managed.process)) {
-      release();
-      return undefined;
+    if (managed.process && !hasLocalServiceProcessExited(managed.process)) {
+      return { release };
     }
-    return { release };
+    if (await probeHealth(healthUrl, healthHeaders, signal)) {
+      return { release };
+    }
+    release();
+    return undefined;
   } catch (error) {
     const abortingStartup = isAbortForSignal(error, signal) && Boolean(managed.starting);
     release();

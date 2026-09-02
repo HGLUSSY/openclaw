@@ -31,7 +31,7 @@ import {
   validateLlamaServerNonInteractive,
 } from "./external-server/setup.js";
 import { wrapLlamaServerStream } from "./external-server/stream.js";
-import { ensureManagedLlamaServerForChat } from "./managed-server.js";
+import { ensureManagedLlamaServerForChat, reconcileManagedLlamaServer } from "./managed-server.js";
 import { detectLlamaCppSetup, prepareLlamaCppSetup, runLlamaCppSetup } from "./setup.js";
 
 export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
@@ -127,6 +127,7 @@ export function registerLlamaCppProvider(api: OpenClawPluginApi): void {
       ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.localService
         ? undefined
         : await prepareLlamaServerDynamicModel(ctx),
+    reconcileLocalService: reconcileManagedLlamaServer,
     wrapStreamFn: (ctx) => {
       const providerConfig = ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
       if (!providerConfig?.localService) {
