@@ -15,6 +15,7 @@ import {
   runManagedCommand,
   terminateManagedChild,
 } from "../../scripts/lib/managed-child-process.mts";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import { hasErrnoCode } from "../../src/infra/errno.js";
 import { createBoundedChildOutput } from "./bounded-child-output.js";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
@@ -1082,7 +1083,7 @@ describe("openclaw test instance", () => {
       if (inheritedPipes) {
         expect(runTaskkill).toHaveBeenCalledOnce();
         expect(runTaskkill).toHaveBeenCalledWith(
-          path.win32.join("C:\\Windows", "System32", "taskkill.exe"),
+          resolveWindowsTaskkillPath(),
           ["/PID", "12345", "/T", "/F"],
           {
             killSignal: "SIGKILL",
