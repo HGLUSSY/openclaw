@@ -68,7 +68,7 @@ let primary;
 let cleanupFailure;
 const facts = { platform: process.platform, node: process.version, taskkills };
 try {
-  // Same real inherited-stderr topology as the existing late-refuse fixture.
+  // The writer must survive its leader; Windows needs detachment to keep inherited stderr open.
   await Promise.all([
     fs.writeFile(path.join(cwd, "dist", ".buildstamp"), ""),
     fs.writeFile(path.join(cwd, "dist", ".runtime-postbuildstamp"), ""),
@@ -77,7 +77,7 @@ try {
       `
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
-const writer = spawn(process.execPath, ["-e", 'require("node:http").get(process.argv[1], response => { response.resume(); response.on("end", () => process.stderr.write(process.argv[2], () => process.exit(0))); });', ${JSON.stringify(controlUrl)}, ${JSON.stringify("held stderr drained\n")}], { stdio: ["ignore", "ignore", "inherit"] });
+const writer = spawn(process.execPath, ["-e", 'require("node:http").get(process.argv[1], response => { response.resume(); response.on("end", () => process.stderr.write(process.argv[2], () => process.exit(0))); });', ${JSON.stringify(controlUrl)}, ${JSON.stringify("held stderr drained\n")}], { detached: true, stdio: ["ignore", "ignore", "inherit"] });
 writeFileSync(${JSON.stringify(path.join(cwd, "writer.pid"))}, String(writer.pid));
 process.exit(1);
 `,
@@ -95,8 +95,11 @@ process.exit(1);
   await withTestTimeout(
     Promise.race([
       writerReady,
-      outcome.then(() => {
-        throw new Error("CLI completed before the writer reached its gate");
+      outcome.then((result) => {
+        const detail = result.error?.message ?? JSON.stringify(result.value);
+        throw new Error(`CLI completed before the writer reached its gate: ${detail}`, {
+          cause: result.error,
+        });
       }),
     ]),
     5_000,
@@ -112,7 +115,6 @@ process.exit(1);
   assert.equal(leader.child.stderr.closed, false);
   assert.equal(isProcessAlive(writerPid), true);
   facts.boundaryEstablished = true;
-  facts.writerPid = writerPid;
   const result = await outcome;
   const error = result.error;
   retainedFailure = error;
@@ -201,6 +203,7 @@ process.exit(1);
                 Number.isSafeInteger(writerPid) && writerPid > 1,
                 "invalid writer identity",
               );
+              facts.writerPid = writerPid;
               await waitForDead(writerPid, 5_000);
             }
             facts.allOwnedPipesClosed = spawned.every(
@@ -239,5 +242,8 @@ facts.cleanupFailure = cleanupFailure
 // Leave the real pending receipt intact. The enclosing owner may dispose of this
 // private proof namespace only after this report, native child close and its own PID check.
 await fs.writeFile(path.join(root, "native-cli-proof.json"), JSON.stringify(facts, null, 2) + "\n");
+if (primary || cleanupFailure) {
+  process.stderr.write(JSON.stringify(facts) + "\n");
+}
 process.exitCode = primary || cleanupFailure ? 1 : 0;
 process.disconnect();

@@ -20,6 +20,7 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
+import { isSessionArchiveArtifactName } from "./artifacts.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -1619,7 +1620,10 @@ describe("sqlite session normalization", () => {
         );
         archivedStale = fs
           .readdirSync(paths.tempDir)
-          .filter((file) => file.startsWith("stale-session.jsonl.deleted."));
+          .filter(
+            (file) =>
+              file.startsWith("stale-session.jsonl.deleted.") && isSessionArchiveArtifactName(file),
+          );
         expect(archivedStale).toHaveLength(1);
       },
       { timeout: 5_000 },

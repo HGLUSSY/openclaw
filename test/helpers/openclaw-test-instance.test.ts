@@ -27,7 +27,10 @@ const MIGRATION_CONVERGENCE_REFUSAL =
   "OpenClaw plugin migration inputs changed during startup convergence;";
 const RESTART_MARKER =
   "[openclaw-test-instance] restarting gateway after migration convergence refusal";
-const fakeInstances: Awaited<ReturnType<typeof createOpenClawTestInstance>>[] = [];
+const fakeInstances: {
+  instance: Awaited<ReturnType<typeof createOpenClawTestInstance>>;
+  lateWriterPidPath?: string;
+}[] = [];
 const fakeRoots: string[] = [];
 const fakeOperations: Promise<unknown>[] = [];
 const fakeControls: FakeGatewayControl[] = [];
@@ -58,13 +61,23 @@ afterEach(async () => {
   }
   await Promise.allSettled(fakeOperations.splice(0));
   const results = await Promise.allSettled(
-    fakeInstances.splice(0).map(async (instance) => {
+    fakeInstances.splice(0).map(async (owner) => {
+      const { instance, lateWriterPidPath } = owner;
       // Baseline failures can spawn after cleanup has already marked itself done.
       try {
-        await instance.stopGateway();
+        await runQaGatewayFixture(
+          () => instance.stopGateway(),
+          async () => {
+            if (lateWriterPidPath) {
+              const pid = Number(await fs.readFile(lateWriterPidPath, "utf8"));
+              expect(Number.isSafeInteger(pid) && pid > 1).toBe(true);
+              await waitForDead(pid, 5_000);
+            }
+          },
+        );
         await instance.cleanup();
       } catch (error) {
-        fakeInstances.push(instance);
+        fakeInstances.push(owner);
         throw error;
       }
     }),
@@ -210,7 +223,8 @@ if (kind === "cli") {
 const refusal = ${JSON.stringify(MIGRATION_CONVERGENCE_REFUSAL)};
 if (kind === "refuse") { process.stderr.write(refusal + " fixture\\n"); process.exit(1); }
 if (kind === "late-refuse") {
-  const delayed = spawn(process.execPath, ["-e", 'require("node:http").get(process.argv[1] + "/wait", (response) => { response.resume(); response.on("end", () => process.stderr.write(process.argv[2], () => process.exit(0))); });', controlUrl, refusal + " delayed fixture\\n"], { stdio: ["ignore", "ignore", "inherit"] });
+  // Windows otherwise kills the writer when its leader exits; keep inherited stderr open.
+  const delayed = spawn(process.execPath, ["-e", 'require("node:http").get(process.argv[1] + "/wait", (response) => { response.resume(); response.on("end", () => process.stderr.write(process.argv[2], () => process.exit(0))); });', controlUrl, refusal + " delayed fixture\\n"], { detached: process.platform === "win32", stdio: ["ignore", "ignore", "inherit"] });
   recordFixtureProcess(delayed.pid);
   writeFileSync(tracePath + ".late-pid", String(delayed.pid));
   process.exit(1);
@@ -268,7 +282,13 @@ writeFileSync("dist/.runtime-postbuildstamp", "");
     startTimeoutMs,
     stopTimeoutMs,
   });
-  fakeInstances.push(instance);
+  fakeInstances.push({
+    instance,
+    // The released HTTP gate owns this writer even when readiness fails.
+    lateWriterPidPath: sequence.split(",").includes("late-refuse")
+      ? `${tracePath}.late-pid`
+      : undefined,
+  });
   return {
     instance,
     tracePath,
@@ -443,7 +463,9 @@ describe("openclaw test instance", () => {
                       Promise.race([
                         control.reached,
                         closed.then(() => {
-                          throw new Error("native probe closed before writer readiness");
+                          throw new Error(
+                            `native probe closed before writer readiness\n${output.text()}`,
+                          );
                         }),
                       ]),
                       30_000,
@@ -503,9 +525,10 @@ describe("openclaw test instance", () => {
                           `native CLI rescue was not verified: ${JSON.stringify(report)}`,
                         );
                       }
-                      expect(Number.isSafeInteger(report.writerPid) && report.writerPid > 1).toBe(
-                        true,
-                      );
+                      expect(
+                        Number.isSafeInteger(report.writerPid) && report.writerPid > 1,
+                        `${output.text()}\n${JSON.stringify(report)}`,
+                      ).toBe(true);
                       await waitForDead(report.writerPid, 5_000);
                       // The nested pending claim stays intact. Only this outer owner may
                       // dispose of its namespace after the real probe and writer have joined.
@@ -701,9 +724,13 @@ describe("openclaw test instance", () => {
     },
   );
 
-  it.each(["near", "stdout", "status2", "signal", "unrelated"])(
+  it.for(["near", "stdout", "status2", "signal", "unrelated"])(
     "keeps %s convergence lookalikes terminal",
-    async (action) => {
+    async (action, context) => {
+      // A Windows self-SIGTERM is status 1/null, already covered by the refusal case.
+      if (action === "signal" && process.platform === "win32") {
+        context.skip();
+      }
       const { instance, readAttempts } = await createFakeGateway(`${action},ready`);
       await expect(instance.startGateway()).rejects.toThrow("gateway exited before readiness");
       expect(await readAttempts()).toHaveLength(1);
@@ -933,7 +960,9 @@ describe("openclaw test instance", () => {
         // Join before afterEach removes either root, and preserve both failures
         // rather than letting last-resort cleanup hide the original regression.
         if (cleanup.status === "rejected") {
-          fakeInstances.splice(fakeInstances.indexOf(instance), 1);
+          const ownerIndex = fakeInstances.findIndex((owner) => owner.instance === instance);
+          expect(ownerIndex).toBeGreaterThanOrEqual(0);
+          fakeInstances.splice(ownerIndex, 1);
           fakeRoots.splice(fakeRoots.indexOf(path.dirname(tracePath)), 1);
         }
         const failures = [proof, cleanup].flatMap((result) =>
