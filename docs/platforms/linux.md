@@ -340,6 +340,13 @@ Use this opt-out only for controlled diagnosis: it removes child-first OOM
 protection and makes the Gateway more likely to be selected as the victim under
 real memory pressure.
 
+Managed local model and embedding services fall back to direct spawn when their
+effective environment defines `SHELLOPTS`, `BASHOPTS`, a `BASH_FUNC_*` key, or
+a reserved `OC_INTERNAL_OOM_EXEC_{BASH_ENV,ENV,CDPATH,PS4}` carrier. Exact
+environment fidelity and shell startup safety take precedence in these cases,
+so OpenClaw does not attempt to change `oom_score_adj`; use the verification
+below to check the child's effective value.
+
 Verify a child process:
 
 ```bash
