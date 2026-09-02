@@ -17,8 +17,10 @@ private enum WatchTextValue {
 }
 
 struct WatchInboxView: View {
+    @Binding var navigationPath: [WatchDestination]
     var store: WatchInboxStore
     var directNode: WatchDirectNode
+    var voiceCall: WatchRealtimeCallController
     var onAction: ((WatchPromptAction) -> Void)?
     var onExecApprovalDecision: ((String, String?, WatchExecApprovalDecision) -> Void)?
     var onRefreshExecApprovalReview: (() -> Void)?
@@ -27,7 +29,7 @@ struct WatchInboxView: View {
     var onSendChatMessage: ((String) -> String?)?
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: self.$navigationPath) {
             WatchControlSurfaceView(
                 store: self.store,
                 directNode: self.directNode,
@@ -38,6 +40,12 @@ struct WatchInboxView: View {
                 onAppCommand: self.onAppCommand,
                 onSendChatMessage: self.onSendChatMessage)
                 .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(for: WatchDestination.self) { destination in
+                    switch destination {
+                    case .standaloneVoice:
+                        WatchRealtimeCallView(directNode: self.directNode, controller: self.voiceCall)
+                    }
+                }
         }
     }
 }
@@ -108,6 +116,13 @@ private struct WatchControlSurfaceView: View {
                     accessory: .verbatim(self.store.talkSummaryText))
             }
             .buttonStyle(.plain)
+
+            NavigationLink(value: WatchDestination.standaloneVoice) {
+                WatchPrimaryLabel(title: "Talk on Watch")
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens standalone voice without starting the microphone")
+            .accessibilityIdentifier("watch-standalone-voice")
 
             NavigationLink {
                 self.chatTimelineDestination
@@ -364,7 +379,8 @@ private struct WatchControlSurfaceView: View {
             WatchDetailText(
                 text: .verbatim(String(localized: """
                 Direct mode supports device info, status, and notifications. \
-                Chat, Talk, and approvals still use the iPhone.
+                Set up standalone voice on iPhone to use Talk on Watch. \
+                Chat and approvals still use the iPhone.
                 """)))
 
             if self.directNode.isConfigured {

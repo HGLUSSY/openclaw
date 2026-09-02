@@ -43,6 +43,11 @@ type DevicePairingAccessMetadata = Pick<
   "displayName" | "remoteIp" | "lastSeenAtMs" | "lastSeenReason"
 >;
 
+type BootstrapDevicePairingOptions = {
+  accessMetadata?: DevicePairingAccessMetadata;
+  onTokensReplaced?: (deviceId: string, roles: readonly string[]) => void;
+};
+
 /** Authorization failure categories for owner approval and bootstrap approval flows. */
 type DevicePairingForbiddenReason =
   | "caller-scopes-required"
@@ -405,13 +410,13 @@ export async function approveBootstrapDevicePairing(
 export async function approveBootstrapDevicePairing(
   requestId: string,
   bootstrapProfile: DeviceBootstrapProfile,
-  options: { accessMetadata?: DevicePairingAccessMetadata },
+  options: BootstrapDevicePairingOptions,
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
 export async function approveBootstrapDevicePairing(
   requestId: string,
   bootstrapProfile: DeviceBootstrapProfile,
-  optionsOrBaseDir?: { accessMetadata?: DevicePairingAccessMetadata } | string,
+  optionsOrBaseDir?: BootstrapDevicePairingOptions | string,
   maybeBaseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
   const options =
@@ -493,6 +498,13 @@ export async function approveBootstrapDevicePairing(
       approvedVia: "bootstrap",
       accessMetadata: options?.accessMetadata,
     });
-    return commitApprovedDevicePairing({ state, requestId, device, baseDir });
+    const approved = commitApprovedDevicePairing({ state, requestId, device, baseDir });
+    // A bootstrap may narrow an existing role. Retire its connected grant in
+    // the same commit turn, before the pairing lock releases to another caller.
+    const replacedRoles = grantedRoles.filter((role) => existing?.tokens?.[role]);
+    if (replacedRoles.length > 0) {
+      options?.onTokensReplaced?.(device.deviceId, replacedRoles);
+    }
+    return approved;
   });
 }

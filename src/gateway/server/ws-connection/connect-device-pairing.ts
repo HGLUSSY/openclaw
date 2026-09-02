@@ -26,6 +26,7 @@ import {
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { isBrowserCopilotClient } from "../../../utils/message-channel.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
+import { retireDeviceTokenClients } from "../../device-token-client-lifecycle.js";
 import { normalizeNodeHostCompatibilityMetadata } from "../../node-legacy-protocol-filter.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { formatForLog } from "../../ws-log.js";
@@ -271,7 +272,16 @@ export async function authorizeGatewayConnectDevice(
               ? await approveBootstrapDevicePairing(
                   pairing.request.requestId,
                   plan.bootstrapApprovalProfile,
-                  { accessMetadata: clientAccessMetadata },
+                  {
+                    accessMetadata: clientAccessMetadata,
+                    onTokensReplaced: (deviceId, roles) =>
+                      retireDeviceTokenClients(
+                        requestContext,
+                        deviceId,
+                        roles,
+                        "device-token-rotated",
+                      ),
+                  },
                 )
               : await approveDevicePairing(pairing.request.requestId, {
                   // A silent self-grant's authority is locality plus proven
