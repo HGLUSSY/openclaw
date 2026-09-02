@@ -140,31 +140,66 @@ describe("minimal npm extended-stable workflow", () => {
     ).toBe(true);
   });
 
-  it("hydrates only bounded ancestry for source and Tideclaw checks", () => {
+  it("routes source and Tideclaw history through the trusted ancestry owner", () => {
     const parsed = workflow(preflightWorkflowPath);
+    const sourceAncestry = step(
+      parsed.jobs?.check_openclaw_npm,
+      "Establish source ancestry with main",
+    );
+    const tideclawAncestry = step(
+      parsed.jobs?.prepare_openclaw_npm,
+      "Establish Tideclaw alpha ancestry",
+    );
     const sourceCheck = step(
       parsed.jobs?.check_openclaw_npm,
       "Check source, test types, and architecture",
-    ).run;
-    const tideclawCheck = step(
-      parsed.jobs?.prepare_openclaw_npm,
-      "Validate Tideclaw alpha preflight target",
-    ).run;
+    );
+    const trustedCheckout = step(
+      parsed.jobs?.check_openclaw_npm,
+      "Checkout trusted package source preflight",
+    );
     const metadata = step(parsed.jobs?.check_dependencies_npm, "Validate release metadata").run;
 
-    for (const run of [sourceCheck, tideclawCheck]) {
-      expect(run).not.toContain("--unshallow");
-      expect(run?.match(/--depth=50/gu)).toHaveLength(1);
-      expect(run?.match(/--deepen=50/gu)).toHaveLength(1);
-      expect(run).toContain("timeout --signal=TERM --kill-after=10s 120s git fetch");
+    expect(trustedCheckout.with?.["sparse-checkout"]).toContain(".github/actions/git-owner");
+    expect(sourceAncestry).toMatchObject({
+      env: {
+        RELEASE_ANCESTRY_MODE: "merge-base",
+        RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
+        RELEASE_ANCESTRY_TOTAL_SECONDS: "120",
+      },
+    });
+    expect(tideclawAncestry).toMatchObject({
+      env: {
+        RELEASE_ANCESTRY_MODE: "ancestor",
+        RELEASE_ANCESTRY_TARGET_REF: "${{ github.ref }}",
+        RELEASE_ANCESTRY_TOTAL_SECONDS: "120",
+      },
+    });
+    for (const ancestry of [sourceAncestry, tideclawAncestry]) {
+      expect(ancestry.run).toContain(
+        "python3 -I -S .release-harness/.github/actions/git-owner/owner.py",
+      );
+      expect(ancestry.run).toContain(
+        "--policy .release-harness/.github/actions/git-owner/release-ancestry.py",
+      );
     }
-    expect(sourceCheck).toContain('if ! git merge-base "$source_sha" "$main_ref"');
-    expect(sourceCheck).toContain("Unable to establish source merge base with main");
-    expect(tideclawCheck).toContain('if ! git merge-base --is-ancestor "$target_sha" "$alpha_ref"');
+    expect(sourceCheck.run).toBe("pnpm check --include-test-types --include-architecture");
     expect(metadata).toContain("--unshallow origin");
     expect(metadata).toContain('"+refs/tags/v*:refs/tags/v*"');
-    expect(metadata).not.toContain("--depth=50");
-    expect(metadata).not.toContain("--deepen=50");
+    const sourceSteps = parsed.jobs?.check_openclaw_npm?.steps ?? [];
+    const prepareSteps = parsed.jobs?.prepare_openclaw_npm?.steps ?? [];
+    expect(sourceSteps.indexOf(trustedCheckout)).toBeLessThan(sourceSteps.indexOf(sourceAncestry));
+    expect(sourceSteps.indexOf(sourceAncestry)).toBeLessThan(sourceSteps.indexOf(sourceCheck));
+    expect(prepareSteps.indexOf(tideclawAncestry)).toBeGreaterThan(
+      prepareSteps.findIndex(
+        (candidate) => candidate.name === "Checkout trusted package source preflight",
+      ),
+    );
+    expect(prepareSteps.indexOf(tideclawAncestry)).toBeLessThan(
+      prepareSteps.findIndex(
+        (candidate) => candidate.name === "Validate npm package source metadata",
+      ),
+    );
   });
 
   it("adds extended-stable without adding policy or verifier contracts", () => {
