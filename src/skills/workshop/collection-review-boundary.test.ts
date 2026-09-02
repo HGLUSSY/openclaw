@@ -15,6 +15,7 @@ import {
   listSkillCollectionReviewOutcomes,
   readSkillReviewOutcomes,
 } from "./collection-review-state.js";
+import { MAX_EVALUATION_FILE_BYTES } from "./proposal-bundle.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
 type ReviewChange = Pick<PluginHookSkillChangedEvent, "action">;
@@ -296,6 +297,39 @@ describe("skill collection review boundary", () => {
         written: [],
         dropped: [],
       });
+    } finally {
+      await testState.cleanup();
+    }
+  });
+
+  it("restores the tree when a changed file exceeds the inspection limit", async () => {
+    const testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-skill-collection-review-oversized-file-",
+    });
+    const skillsRoot = resolveWorkshopSkillsDir(testState.env);
+    const oversizedFile = path.join(skillsRoot, "new-file.txt");
+    try {
+      await writeSkill(skillsRoot, "procedure", "Procedure", "# Before\n");
+      const result = await runSkillCollectionReviewForAgent({
+        config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+        agentId: "main",
+        job: createReviewJob("skill-review-oversized-file"),
+        env: testState.env,
+        runTurn: async () => {
+          await fs.writeFile(oversizedFile, Buffer.alloc(MAX_EVALUATION_FILE_BYTES + 1));
+          return { status: "ok", summary: "reviewed", outputText: "" };
+        },
+      });
+
+      expect(result.status).toBe("error");
+      await expect(fs.access(oversizedFile)).rejects.toThrow();
+      await expect(
+        fs.readFile(path.join(skillsRoot, "procedure", "SKILL.md"), "utf8"),
+      ).resolves.toContain("# Before");
+      expect(readSkillReviewOutcomes({ env: testState.env }).collectionReviews.workshop).toEqual(
+        expect.objectContaining({ error: expect.any(String) }),
+      );
     } finally {
       await testState.cleanup();
     }
