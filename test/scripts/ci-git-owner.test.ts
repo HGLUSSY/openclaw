@@ -30,6 +30,10 @@ const fastReleaseAncestryPolicy = releaseAncestryPolicy.replace(
   "max_fetch_seconds = 30",
   "max_fetch_seconds = 2",
 );
+const expiredReleaseAncestryPolicy = releaseAncestryPolicy.replace(
+  "max_total_seconds = 120",
+  "max_total_seconds = 0",
+);
 
 type AncestryFixture = {
   origin: string;
@@ -89,6 +93,61 @@ function createAncestryFixture(options: {
   return { origin, root, source, target };
 }
 
+function createProvisionalMergeBaseFixture(): AncestryFixture & { base: string } {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-release-ancestry-provisional-"));
+  const origin = join(root, "origin.git");
+  fixtureGit(root, ["init", "--quiet", "--bare", origin]);
+  const commits = Array.from({ length: 341 }, (_, index) => {
+    const mark = index + 1;
+    const parent = mark > 1 ? `from :${String(mark - 1)}\n` : "";
+    return `commit refs/heads/main
+mark :${String(mark)}
+committer fixture <fixture@example.invalid> ${String(mark)} +0000
+data 1
+x
+${parent}
+`;
+  });
+  commits.push(`commit refs/heads/main
+mark :342
+committer fixture <fixture@example.invalid> 342 +0000
+data 1
+x
+from :341
+merge :1
+
+`);
+  for (let mark = 343; mark <= 562; mark += 1) {
+    const parent = mark === 343 ? 121 : mark - 1;
+    commits.push(`commit refs/heads/release-source
+mark :${String(mark)}
+committer fixture <fixture@example.invalid> ${String(mark)} +0000
+data 1
+x
+from :${String(parent)}
+
+`);
+  }
+  commits.push(`commit refs/heads/release-source
+mark :563
+committer fixture <fixture@example.invalid> 563 +0000
+data 1
+x
+from :562
+merge :1
+
+`);
+  fixtureGit(origin, ["fast-import", "--quiet"], commits.join(""));
+  fixtureGit(origin, ["symbolic-ref", "HEAD", "refs/heads/main"]);
+  return {
+    base: fixtureGit(origin, ["rev-parse", "refs/heads/main~221"]),
+    origin,
+    root,
+    source: fixtureGit(origin, ["rev-parse", "refs/heads/release-source"]),
+    target: fixtureGit(origin, ["rev-parse", "refs/heads/main"]),
+  };
+}
+
 function cloneAncestrySource(fixture: AncestryFixture, name: string) {
   const checkout = join(fixture.root, name);
   fixtureGit(fixture.root, [
@@ -134,7 +193,6 @@ function runReleaseAncestry(
       ...process.env,
       RELEASE_ANCESTRY_MODE: mode,
       RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
-      RELEASE_ANCESTRY_TOTAL_SECONDS: "120",
       ...env,
     },
   });
@@ -179,6 +237,38 @@ releasePolicyIt("hydrates a divergent release merge base beyond the legacy 50+50
     expect(fixtureGit(legacy, ["rev-parse", "--is-shallow-repository"])).toBe("true");
 
     const checkout = cloneAncestrySource(fixture, "progressive");
+    expectPolicySuccess(runReleaseAncestry(checkout, "merge-base"), "merge-base");
+    expect(fixtureGit(checkout, ["merge-base", fixture.source, fixture.target])).not.toBe("");
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+releasePolicyIt("deepens past a provisional shallow merge base", () => {
+  const fixture = createProvisionalMergeBaseFixture();
+  try {
+    const checkout = cloneAncestrySource(fixture, "checkout");
+    expectPolicySuccess(runReleaseAncestry(checkout, "merge-base"), "merge-base");
+    expect(
+      fixtureGit(checkout, [
+        "merge-base",
+        fixture.source,
+        "refs/remotes/origin/release-ancestry-target",
+      ]),
+    ).toBe(fixture.base);
+  } finally {
+    rmSync(fixture.root, { force: true, recursive: true });
+  }
+});
+
+releasePolicyIt("accepts a newly proven relation when deepening only moves a boundary", () => {
+  const fixture = createAncestryFixture({
+    sourceDistance: 64,
+    targetDistance: 8,
+    related: true,
+  });
+  try {
+    const checkout = cloneAncestrySource(fixture, "checkout");
     expectPolicySuccess(runReleaseAncestry(checkout, "merge-base"), "merge-base");
     expect(fixtureGit(checkout, ["merge-base", fixture.source, fixture.target])).not.toBe("");
   } finally {
@@ -292,51 +382,61 @@ exec "$REAL_GIT" "$@"`,
   }
 });
 
-releasePolicyIt(
-  "drains one timed-out release ancestry fetch and returns 124 without retry",
-  async () => {
+releasePolicyIt.each([
+  { label: "timeout", failure: "hang" },
+  { label: "Git failure", failure: 23 },
+] as const)(
+  "retries a drained release ancestry fetch after $label",
+  async ({ failure }) => {
     const report = await runCiGitStep({
-      policy: fastReleaseAncestryPolicy,
+      policy: failure === "hang" ? fastReleaseAncestryPolicy : releaseAncestryPolicy,
       env: {
         RELEASE_ANCESTRY_MODE: "merge-base",
         RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
-        RELEASE_ANCESTRY_TOTAL_SECONDS: "120",
       },
-      fetchResults: ["hang"],
+      fetchResults: [failure, 0],
       commandResults: {
         "rev-parse --verify HEAD^{commit}": { code: 0, output: `${head}\n` },
+        "rev-parse --verify refs/remotes/origin/release-ancestry-target^{commit}": {
+          code: 0,
+          output: `${base}\n`,
+        },
+        "rev-parse --is-shallow-repository": { code: 0, output: "false\n" },
+        [`merge-base ${head} ${base}`]: { code: 0, output: `${base}\n` },
       },
     });
-    expect(report.code, report.output).toBe(124);
-    expect(report.fetches).toHaveLength(1);
+    expect(report.code, report.output).toBe(0);
+    expect(report.fetches).toHaveLength(2);
+    expect(report.output).toContain("fetch failed on attempt 1; retrying");
   },
   55_000,
 );
 
-releasePolicyIt("preserves a release ancestry Git failure without retry", async () => {
-  const report = await runCiGitStep({
-    policy: releaseAncestryPolicy,
-    env: {
-      RELEASE_ANCESTRY_MODE: "merge-base",
-      RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
-      RELEASE_ANCESTRY_TOTAL_SECONDS: "120",
-    },
-    fetchResults: [23],
-    commandResults: {
-      "rev-parse --verify HEAD^{commit}": { code: 0, output: `${head}\n` },
-    },
-  });
-  expect(report.code, report.output).toBe(23);
-  expect(report.fetches).toHaveLength(1);
-});
+releasePolicyIt(
+  "preserves the final release ancestry Git failure after bounded retries",
+  async () => {
+    const report = await runCiGitStep({
+      policy: releaseAncestryPolicy,
+      env: {
+        RELEASE_ANCESTRY_MODE: "merge-base",
+        RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
+      },
+      fetchResults: [23, 23, 23],
+      commandResults: {
+        "rev-parse --verify HEAD^{commit}": { code: 0, output: `${head}\n` },
+      },
+    });
+    expect(report.code, report.output).toBe(23);
+    expect(report.fetches).toHaveLength(3);
+  },
+);
 
 releasePolicyIt("returns 124 when the release ancestry total budget is exhausted", async () => {
   const report = await runCiGitStep({
-    policy: releaseAncestryPolicy,
+    policy: expiredReleaseAncestryPolicy,
     env: {
       RELEASE_ANCESTRY_MODE: "merge-base",
       RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
-      RELEASE_ANCESTRY_TOTAL_SECONDS: "1",
     },
     fetchResults: [],
   });

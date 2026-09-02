@@ -178,7 +178,6 @@ jobs:
         env:
           RELEASE_ANCESTRY_MODE: merge-base
           RELEASE_ANCESTRY_TARGET_REF: refs/heads/main
-          RELEASE_ANCESTRY_TOTAL_SECONDS: "120"
         run: |
           exec python3 -I -S .release-harness/.github/actions/git-owner/owner.py \
             --policy .release-harness/.github/actions/git-owner/release-ancestry.py
@@ -236,7 +235,6 @@ jobs:
         env:
           RELEASE_ANCESTRY_MODE: ancestor
           RELEASE_ANCESTRY_TARGET_REF: ${{ github.ref }}
-          RELEASE_ANCESTRY_TOTAL_SECONDS: "120"
         run: |
           exec python3 -I -S .release-harness/.github/actions/git-owner/owner.py \
             --policy .release-harness/.github/actions/git-owner/release-ancestry.py

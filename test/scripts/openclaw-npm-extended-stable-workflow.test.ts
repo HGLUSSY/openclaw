@@ -165,17 +165,16 @@ describe("minimal npm extended-stable workflow", () => {
       env: {
         RELEASE_ANCESTRY_MODE: "merge-base",
         RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
-        RELEASE_ANCESTRY_TOTAL_SECONDS: "120",
       },
     });
     expect(tideclawAncestry).toMatchObject({
       env: {
         RELEASE_ANCESTRY_MODE: "ancestor",
         RELEASE_ANCESTRY_TARGET_REF: "${{ github.ref }}",
-        RELEASE_ANCESTRY_TOTAL_SECONDS: "120",
       },
     });
     for (const ancestry of [sourceAncestry, tideclawAncestry]) {
+      expect(ancestry.env).not.toHaveProperty("RELEASE_ANCESTRY_TOTAL_SECONDS");
       expect(ancestry.run).toContain(
         "python3 -I -S .release-harness/.github/actions/git-owner/owner.py",
       );
