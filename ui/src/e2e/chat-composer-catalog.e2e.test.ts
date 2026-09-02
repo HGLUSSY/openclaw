@@ -260,7 +260,7 @@ suite.define(() => {
         });
       }
       await options.first().click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
     });
   });
 

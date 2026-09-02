@@ -34,6 +34,7 @@ import {
   createPreparedInboundRegistryLoader,
   preparedModelRuntimeWorkspaceFactsKey,
 } from "./prepared-model-runtime.inbound-registry.js";
+import { resolvePreparedOAuthRefreshProviderIds } from "./prepared-model-runtime.oauth-refresh.js";
 import { notifyPreparedModelRuntimePublication } from "./prepared-model-runtime.publication-events.js";
 import type {
   PreparedModelRuntimeBuildStats,
@@ -251,6 +252,10 @@ function createSnapshot(
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     config: input.config,
     authModes: resolveUsableAgentCredentialModes(credentials),
+    oauthRefreshProviderIds: resolvePreparedOAuthRefreshProviderIds({
+      oauthProviders: agentFacts.templateAuthStorage.getOAuthProviders(),
+      providerRegistrations: pluginRegistry?.providers ?? [],
+    }),
     metadataSnapshot: pluginMetadataSnapshot,
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     ...(pluginRegistry ? { pluginRegistry } : {}),
