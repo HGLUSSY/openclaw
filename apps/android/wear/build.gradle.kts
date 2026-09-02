@@ -11,14 +11,14 @@ val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
 val openClawAndroidVersionProperties =
   Properties().apply {
     if (!openClawAndroidVersionFile.isFile) {
-      error("Missing Android version properties. Run `pnpm android:version:sync`.")
+      error("Missing Android version properties. Run the shared mobile cutter.")
     }
     openClawAndroidVersionFile.inputStream().use(::load)
   }
 
 fun requireOpenClawAndroidVersionProperty(name: String): String =
   openClawAndroidVersionProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }
-    ?: error("Missing $name in Config/Version.properties. Run `pnpm android:version:sync`.")
+    ?: error("Missing $name in Config/Version.properties. Run the shared mobile cutter.")
 
 val openClawAndroidPhoneVersionCode = requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_CODE").toInt()
 val openClawAndroidBuildNumber = openClawAndroidPhoneVersionCode % 100
