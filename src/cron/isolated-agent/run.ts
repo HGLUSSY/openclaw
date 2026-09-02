@@ -35,6 +35,7 @@ import type {
   CronStoredJob,
 } from "../types.js";
 import { finalizeCronRun } from "./run-finalize.js";
+import { CronExecutionRootRuntimeError } from "./run-prepare-runtime.js";
 import { prepareCronRunContext } from "./run-prepare.js";
 import { CronSessionLifecycleClaimError, type MutableCronSession } from "./run-session-state.js";
 import { logWarn } from "./run.runtime.js";
@@ -314,18 +315,17 @@ export async function runCronIsolatedAgentTurn(params: {
     const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);
     outcome = "error";
     outcomeError = error;
+    const admissionDisposition =
+      err instanceof CronSessionLifecycleClaimError
+        ? err.admissionDisposition
+        : err instanceof CronExecutionRootRuntimeError || !executionStarted
+          ? "rejected"
+          : undefined;
     return prepared.context.withRunSession({
       status: "error",
       error,
       executionStarted,
-      ...(!executionStarted
-        ? {
-            admissionDisposition:
-              err instanceof CronSessionLifecycleClaimError
-                ? err.admissionDisposition
-                : ("rejected" as const),
-          }
-        : {}),
+      ...(admissionDisposition ? { admissionDisposition } : {}),
       // Carry the already-resolved run model into the error/timeout row so
       // Task-run history keeps provider/model attribution instead of looking like
       // an un-attributed cron timeout. finalizeCronRun does the same via

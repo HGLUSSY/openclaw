@@ -155,20 +155,6 @@ export async function runSkillCollectionReviewForAgent(params: {
           },
         });
         assertCurrent(lease);
-        if (turnResult.admissionDisposition === "rejected") {
-          const error =
-            turnResult.error ??
-            `Skill collection review turn ended with status: ${turnResult.status}`;
-          recordSkillCollectionReviewStatus({ attemptedAtMs, error }, stateOptions);
-          await discardPendingCollectionBackup(backup);
-          return {
-            result: { ...turnResult, status: "error", error, summary: error },
-            changes: [],
-          };
-        }
-        const reviewErrors: string[] = [];
-        const dropReasons = parseDropReasons(turnResult.outputText);
-        const after = await resolveReviewSkills(params.config, params.env);
         let afterFiles: Map<string, ReviewSkillFile>;
         try {
           afterFiles = await snapshotWorkshopSkillFiles(skillsRoot);
@@ -181,6 +167,28 @@ export async function runSkillCollectionReviewForAgent(params: {
           }
           throw error;
         }
+        if (turnResult.admissionDisposition === "rejected") {
+          const error =
+            turnResult.error ??
+            `Skill collection review turn ended with status: ${turnResult.status}`;
+          const unchanged =
+            beforeFiles.size === afterFiles.size &&
+            [...beforeFiles].every(
+              ([relativePath, file]) =>
+                afterFiles.get(relativePath)?.contentHash === file.contentHash,
+            );
+          if (unchanged) {
+            recordSkillCollectionReviewStatus({ attemptedAtMs, error }, stateOptions);
+            await discardPendingCollectionBackup(backup);
+            return {
+              result: { ...turnResult, status: "error", error, summary: error },
+              changes: [],
+            };
+          }
+        }
+        const reviewErrors: string[] = [];
+        const dropReasons = parseDropReasons(turnResult.outputText);
+        const after = await resolveReviewSkills(params.config, params.env);
         const beforeByName = new Map(before.map((skill) => [skill.name, skill]));
         const afterByDir = new Map(
           after.map((skill) => [path.relative(skillsRoot, skill.baseDir), skill]),

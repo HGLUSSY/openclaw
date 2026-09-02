@@ -70,7 +70,7 @@ import {
 } from "./run-execution.runtime.js";
 import { resolveCronFallbacksOverride } from "./run-fallback-policy.js";
 import {
-  CRON_EXECUTION_ROOT_RUNTIME_ERROR,
+  CronExecutionRootRuntimeError,
   isCronRuntimeAllowedForExecutionRoot,
 } from "./run-prepare-runtime.js";
 import {
@@ -499,7 +499,8 @@ function createCronPromptExecutor(params: {
         });
         return classification && currentAttemptCommittedMedia() ? undefined : classification;
       },
-      canFallbackAfterError: () => !currentAttemptCommittedMedia(),
+      canFallbackAfterError: ({ error }) =>
+        !currentAttemptCommittedMedia() && !(error instanceof CronExecutionRootRuntimeError),
       mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
       run: async (providerOverride, modelOverride, runOptions) => {
         const isFallback = candidateStarted;
@@ -544,7 +545,7 @@ function createCronPromptExecutor(params: {
             effectiveAgentRuntime: candidateRuntime,
           })
         ) {
-          throw new Error(CRON_EXECUTION_ROOT_RUNTIME_ERROR);
+          throw new CronExecutionRootRuntimeError();
         }
         const candidateConfiguredThinkLevel =
           params.immutableThinkLevel ??

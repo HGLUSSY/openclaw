@@ -7,6 +7,8 @@ import type { PluginHookSkillChangedEvent } from "../../plugins/hook-types.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { latestCommittedBackupId } from "./collection-backup.js";
+import { resolveSkillCollectionBackupRoot } from "./collection-paths.js";
 import { restoreLatestSkillCollectionBackup } from "./collection-reconcile.js";
 import { runSkillCollectionReviewForAgent } from "./collection-review-boundary.js";
 import {
@@ -537,11 +539,23 @@ describe("skill collection review boundary", () => {
       prefix: "openclaw-skill-collection-review-runtime-",
     });
     const skillsRoot = resolveWorkshopSkillsDir(testState.env);
-    const beforeVersion = getSkillsSnapshotVersion();
     const error =
       "collection review requires the embedded agent runtime; the configured CLI runtime cannot be rooted at the Workshop directory";
     try {
       await writeSkill(skillsRoot, "procedure", "Procedure", "# Procedure\n");
+      const firstReview = await runSkillCollectionReviewForAgent({
+        config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+        agentId: "main",
+        job: createReviewJob("skill-review-runtime-initial"),
+        env: testState.env,
+        runTurn: async () => ({ status: "ok", summary: "reviewed", outputText: "" }),
+      });
+      expect(firstReview.status).toBe("ok");
+      const backupRoot = resolveSkillCollectionBackupRoot(testState.env);
+      const backupEntriesBefore = await fs.readdir(backupRoot);
+      const backupIdBefore = await latestCommittedBackupId(backupRoot);
+      const historyBefore = listSkillCollectionReviewOutcomes({ env: testState.env });
+      const versionBefore = getSkillsSnapshotVersion();
       const result = await runSkillCollectionReviewForAgent({
         config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
         agentId: "main",
@@ -559,11 +573,85 @@ describe("skill collection review boundary", () => {
       expect(readSkillReviewOutcomes({ env: testState.env }).collectionReviews.workshop).toEqual(
         expect.objectContaining({ error }),
       );
-      expect(getSkillsSnapshotVersion()).toBe(beforeVersion);
-      expect(listSkillCollectionReviewOutcomes({ env: testState.env })).toEqual([]);
+      expect(getSkillsSnapshotVersion()).toBe(versionBefore);
+      expect(listSkillCollectionReviewOutcomes({ env: testState.env })).toHaveLength(
+        historyBefore.length,
+      );
+      expect(await latestCommittedBackupId(backupRoot)).toBe(backupIdBefore);
+      expect(await fs.readdir(backupRoot)).toEqual(backupEntriesBefore);
+      expect((await fs.readdir(backupRoot)).some((entry) => entry.startsWith(".pending-"))).toBe(
+        false,
+      );
       await expect(
         fs.readFile(path.join(skillsRoot, "procedure", "SKILL.md"), "utf8"),
       ).resolves.toContain("# Procedure");
+    } finally {
+      await testState.cleanup();
+    }
+  });
+
+  it("scans and records edits made before a rejected runtime", async () => {
+    const testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-skill-collection-review-runtime-edits-",
+    });
+    const skillsRoot = resolveWorkshopSkillsDir(testState.env);
+    const criticalFile = path.join(skillsRoot, "critical", "SKILL.md");
+    const benignFile = path.join(skillsRoot, "benign", "SKILL.md");
+    const error = "collection review runtime rejected after starting";
+    try {
+      await writeSkill(skillsRoot, "critical", "Critical procedure", "# Before critical\n");
+      await writeSkill(skillsRoot, "benign", "Benign procedure", "# Before benign\n");
+      const result = await runSkillCollectionReviewForAgent({
+        config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+        agentId: "main",
+        job: createReviewJob("skill-review-runtime-edits"),
+        env: testState.env,
+        runTurn: async () => {
+          await fs.writeFile(
+            criticalFile,
+            '---\nname: critical\ndescription: Critical procedure\n---\n\nconst cp = require("child_process");\ncp.exec("bad");\n',
+          );
+          await fs.writeFile(
+            benignFile,
+            "---\nname: benign\ndescription: Benign procedure\n---\n\n# After benign\n",
+          );
+          return {
+            status: "error",
+            admissionDisposition: "rejected",
+            error,
+            summary: error,
+          };
+        },
+      });
+
+      const expectedError =
+        "Skill collection review failed: collection review runtime rejected after starting; " +
+        "Skill collection review completed with errors: security scan rejected critical/SKILL.md";
+      expect(result).toMatchObject({
+        status: "error",
+        error: expectedError,
+        summary: expectedError,
+      });
+      await expect(fs.readFile(criticalFile, "utf8")).resolves.toContain("# Before critical");
+      await expect(fs.readFile(benignFile, "utf8")).resolves.toContain("# After benign");
+      expect(listSkillCollectionReviewOutcomes({ env: testState.env })[0]).toMatchObject({
+        kept: ["critical"],
+        written: ["benign"],
+        dropped: [],
+      });
+      expect(readSkillReviewOutcomes({ env: testState.env }).collectionReviews.workshop).toEqual(
+        expect.objectContaining({ error: expectedError }),
+      );
+      const backupRoot = resolveSkillCollectionBackupRoot(testState.env);
+      const backupId = await latestCommittedBackupId(backupRoot);
+      expect(backupId).toBeDefined();
+      if (backupId) {
+        await expect(fs.access(path.join(backupRoot, backupId))).resolves.toBeUndefined();
+      }
+      expect((await fs.readdir(backupRoot)).some((entry) => entry.startsWith(".pending-"))).toBe(
+        false,
+      );
     } finally {
       await testState.cleanup();
     }

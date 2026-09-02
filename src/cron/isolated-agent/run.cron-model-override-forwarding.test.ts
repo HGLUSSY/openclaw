@@ -550,7 +550,12 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       modelId === "gemini-2.0-flash" ? "openclaw" : "claude-cli",
     );
     isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
-    runEmbeddedAgentMock.mockRejectedValueOnce(new Error("embedded primary failed"));
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        throw new Error("embedded primary failed");
+      },
+    );
     runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "CLI fallback ran" }],
       meta: { agentMeta: {} },
