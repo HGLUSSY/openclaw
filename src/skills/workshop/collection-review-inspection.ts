@@ -39,6 +39,7 @@ export async function inspectWorkshopReviewTree(params: {
   }
   const afterLoadedDirs = await params.resolveAfterLoadedDirs();
   const beforeFileDirs = new Set([...params.beforeFiles.values()].map((file) => file.relativeDir));
+  const afterFileDirs = new Set([...afterFiles.values()].map((file) => file.relativeDir));
   const revertedDirs = new Set<string>();
   const reviewErrors: string[] = [];
   const changedFiles = [...afterFiles.values()].filter((file) => {
@@ -80,6 +81,25 @@ export async function inspectWorkshopReviewTree(params: {
     revertedDirs.add(relativeDir);
     reviewErrors.push(`security scan rejected ${relativePath}`);
   }
+  for (const [relativeDir, relativePath] of beforeFilesByDirectory(params.beforeFiles)) {
+    if (
+      relativeDir === "." ||
+      afterFileDirs.has(relativeDir) ||
+      params.beforeLoadedDirs.has(relativeDir)
+    ) {
+      continue;
+    }
+    params.assertCurrent();
+    await restoreWorkshopReviewPath({
+      skillsRoot: params.skillsRoot,
+      backupDir: params.backupDir,
+      relativeDir,
+      relativePath,
+      existedBefore: true,
+    });
+    revertedDirs.add(relativeDir);
+    reviewErrors.push(`review removed ${relativeDir}, which was not a loaded skill`);
+  }
   for (const file of afterFiles.values()) {
     if (
       afterLoadedDirs.has(file.relativeDir) ||
@@ -103,6 +123,18 @@ export async function inspectWorkshopReviewTree(params: {
     reviewErrors.push(`review left ${file.relativeDir} unloadable`);
   }
   return { afterFiles, reviewErrors };
+}
+
+function beforeFilesByDirectory(
+  beforeFiles: ReadonlyMap<string, WorkshopReviewSkillFile>,
+): Map<string, string> {
+  const files = new Map<string, string>();
+  for (const file of beforeFiles.values()) {
+    if (!files.has(file.relativeDir)) {
+      files.set(file.relativeDir, file.relativePath);
+    }
+  }
+  return files;
 }
 
 export async function snapshotWorkshopSkillFiles(

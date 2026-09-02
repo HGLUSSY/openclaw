@@ -357,6 +357,39 @@ describe("skill collection review boundary", () => {
     }
   });
 
+  it("restores a deleted pre-existing directory that was not a loaded skill", async () => {
+    const testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-skill-collection-review-removed-unloadable-",
+    });
+    const skillsRoot = resolveWorkshopSkillsDir(testState.env);
+    const unloadableDir = path.join(skillsRoot, "unloadable");
+    const unloadableFile = path.join(unloadableDir, "SKILL.md");
+    try {
+      await fs.mkdir(unloadableDir, { recursive: true });
+      await fs.writeFile(unloadableFile, "---\nname: [broken\n---\n");
+      const result = await runSkillCollectionReviewForAgent({
+        config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+        agentId: "main",
+        job: createReviewJob("skill-review-removed-unloadable"),
+        env: testState.env,
+        runTurn: async () => {
+          await fs.rm(unloadableDir, { recursive: true });
+          return { status: "ok", summary: "reviewed", outputText: "" };
+        },
+      });
+
+      expect(result).toMatchObject({
+        status: "error",
+        error:
+          "Skill collection review completed with errors: review removed unloadable, which was not a loaded skill",
+      });
+      await expect(fs.readFile(unloadableFile, "utf8")).resolves.toContain("name: [broken");
+    } finally {
+      await testState.cleanup();
+    }
+  });
+
   it("restores the tree when a changed file exceeds the inspection limit", async () => {
     const testState = await createOpenClawTestState({
       layout: "state-only",
