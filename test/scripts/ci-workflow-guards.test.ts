@@ -9086,7 +9086,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "--only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1",
     );
 
-    type GoEnv = Pick<NodeJS.ProcessEnv, "GOMAXPROCS" | "GOGC" | "GOMEMLIMIT">;
+    type GoEnv = Partial<Pick<NodeJS.ProcessEnv, "GOMAXPROCS" | "GOGC" | "GOMEMLIMIT">>;
     const goEnvKeys = ["GOMAXPROCS", "GOGC", "GOMEMLIMIT"] as const;
     const runLintOwner = ({
       capability,
