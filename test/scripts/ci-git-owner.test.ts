@@ -238,7 +238,8 @@ releasePolicyIt("hydrates a divergent release merge base beyond the legacy 50+50
 
     const checkout = cloneAncestrySource(fixture, "progressive");
     expectPolicySuccess(runReleaseAncestry(checkout, "merge-base"), "merge-base");
-    expect(fixtureGit(checkout, ["merge-base", fixture.source, fixture.target])).not.toBe("");
+    expect(fixtureGit(checkout, ["rev-parse", "refs/remotes/origin/main"])).toBe(fixture.target);
+    expect(fixtureGit(checkout, ["merge-base", fixture.source, "origin/main"])).not.toBe("");
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
   }
@@ -249,13 +250,9 @@ releasePolicyIt("deepens past a provisional shallow merge base", () => {
   try {
     const checkout = cloneAncestrySource(fixture, "checkout");
     expectPolicySuccess(runReleaseAncestry(checkout, "merge-base"), "merge-base");
-    expect(
-      fixtureGit(checkout, [
-        "merge-base",
-        fixture.source,
-        "refs/remotes/origin/release-ancestry-target",
-      ]),
-    ).toBe(fixture.base);
+    expect(fixtureGit(checkout, ["merge-base", fixture.source, "refs/remotes/origin/main"])).toBe(
+      fixture.base,
+    );
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
   }
@@ -330,9 +327,7 @@ exit "$status"`,
     expect(fixtureGit(fixture.root, [`--git-dir=${fixture.origin}`, "rev-parse", "main"])).toBe(
       moved,
     );
-    expect(fixtureGit(checkout, ["rev-parse", "refs/remotes/origin/release-ancestry-target"])).toBe(
-      fixture.target,
-    );
+    expect(fixtureGit(checkout, ["rev-parse", "refs/remotes/origin/main"])).toBe(fixture.target);
   } finally {
     rmSync(fixture.root, { force: true, recursive: true });
   }
@@ -397,7 +392,7 @@ releasePolicyIt.each([
       fetchResults: [failure, 0],
       commandResults: {
         "rev-parse --verify HEAD^{commit}": { code: 0, output: `${head}\n` },
-        "rev-parse --verify refs/remotes/origin/release-ancestry-target^{commit}": {
+        "rev-parse --verify refs/remotes/origin/main^{commit}": {
           code: 0,
           output: `${base}\n`,
         },
