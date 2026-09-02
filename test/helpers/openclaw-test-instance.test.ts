@@ -191,6 +191,10 @@ const port = Number(argv[argv.indexOf("--port") + 1]);
 const env = Object.fromEntries(["HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_STATE_DIR"].map((key) => [key, process.env[key]]));
 appendFileSync(tracePath, JSON.stringify({ argv, config: JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")), cwd: process.cwd(), env, pid: process.pid, port }) + "\\n");
 const kind = (process.env.OPENCLAW_FAKE_GATEWAY_SEQUENCE || "ready").split(",")[attempt - 1] || "ready";
+if (kind === "cli-output") {
+  await new Promise(resolve => process[argv[0]].write(JSON.stringify({ first: "start", value: "😀".repeat(Number(argv[1])), last: "end" }), resolve));
+  process.exit(0);
+}
 process.stdout.write("fake gateway attempt " + attempt + "\\n");
 if (kind === "cli") {
   process.stderr.write("cli diagnostic\\n");
@@ -294,6 +298,40 @@ function createGatewayProcessState(
 }
 
 describe("openclaw test instance", () => {
+  it.each(["stdout", "stderr"] as const)(
+    "preserves complete large CLI JSON on %s",
+    async (stream) => {
+      const { instance, readAttempts } = await createFakeGateway("cli-output");
+      const result = await trackOperation(instance.cli([stream, String(80_000)]));
+      expect(result).toMatchObject({ code: 0, signal: null });
+      expect(JSON.parse(result[stream])).toEqual({
+        first: "start",
+        value: "😀".repeat(80_000),
+        last: "end",
+      });
+      expect(isProcessAlive((await readAttempts())[0]!.pid)).toBe(false);
+    },
+  );
+
+  it.each(["stdout", "stderr"] as const)(
+    "rejects CLI %s overflow after joining the child",
+    async (stream) => {
+      const { instance, readAttempts } = await createFakeGateway("cli-output");
+      await expect(
+        trackOperation(instance.cli([stream, String((2 * 1024 * 1024) / 4)])),
+      ).rejects.toMatchObject({ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" });
+      expect(isProcessAlive((await readAttempts())[0]!.pid)).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("preserves a CLI child exit signal", async () => {
+    const { instance, readAttempts } = await createFakeGateway("signal");
+    const result = await trackOperation(instance.cli([]));
+    expect(result).toMatchObject({ code: null, signal: "SIGTERM" });
+    expect(result.stderr).toContain(MIGRATION_CONVERGENCE_REFUSAL);
+    expect(isProcessAlive((await readAttempts())[0]!.pid)).toBe(false);
+  });
+
   it.each([
     { mode: "0", prepare: false },
     { mode: "7", prepare: false },
@@ -1091,24 +1129,6 @@ describe("openclaw test instance", () => {
 
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(Date.now() - startedAt).toBeLessThan(500);
-  });
-
-  it("signals test instance process groups on POSIX", () => {
-    const child = {
-      pid: 1234,
-      kill: vi.fn(() => true),
-    };
-    const killProcess = vi.fn(() => true);
-
-    testing.signalOpenClawTestProcess(child, "SIGKILL", killProcess);
-
-    if (process.platform === "win32") {
-      expect(killProcess).not.toHaveBeenCalled();
-      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
-    } else {
-      expect(killProcess).toHaveBeenCalledWith(-1234, "SIGKILL");
-      expect(child.kill).not.toHaveBeenCalled();
-    }
   });
 
   it("creates isolated config and spawn env without mutating process env", async () => {
