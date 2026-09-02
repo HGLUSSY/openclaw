@@ -191,6 +191,11 @@ const port = Number(argv[argv.indexOf("--port") + 1]);
 const env = Object.fromEntries(["HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_STATE_DIR"].map((key) => [key, process.env[key]]));
 appendFileSync(tracePath, JSON.stringify({ argv, config: JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")), cwd: process.cwd(), env, pid: process.pid, port }) + "\\n");
 const kind = (process.env.OPENCLAW_FAKE_GATEWAY_SEQUENCE || "ready").split(",")[attempt - 1] || "ready";
+if (kind === "cli-json") {
+  const json = JSON.stringify({ data: "é漢".repeat(60_000), suffix: "complete" });
+  await Promise.all([process.stdout, process.stderr].map((stream) => new Promise((resolve) => stream.write(json, resolve))));
+  process.exit(0);
+}
 process.stdout.write("fake gateway attempt " + attempt + "\\n");
 if (kind === "cli") {
   process.stderr.write("cli diagnostic\\n");
@@ -294,6 +299,18 @@ function createGatewayProcessState(
 }
 
 describe("openclaw test instance", () => {
+  it("returns complete UTF-8 JSON larger than diagnostic tails from both CLI streams", async () => {
+    const { instance } = await createFakeGateway("cli-json");
+    const expected = { data: "é漢".repeat(60_000), suffix: "complete" };
+    expect(Buffer.byteLength(JSON.stringify(expected))).toBeGreaterThan(256 * 1024);
+
+    const result = await trackOperation(instance.cli([]));
+
+    expect(result).toMatchObject({ code: 0, signal: null });
+    expect(JSON.parse(result.stdout)).toEqual(expected);
+    expect(JSON.parse(result.stderr)).toEqual(expected);
+  });
+
   it.each([
     { mode: "0", prepare: false },
     { mode: "7", prepare: false },
@@ -975,6 +992,14 @@ describe("openclaw test instance", () => {
     expect(logs).toContain("recent stderr");
     expect(logs).not.toContain("old stdout");
     expect(logs).not.toContain("old stderr");
+
+    const completeOutput = `old stdout ${"é漢".repeat(60_000)}recent stdout\n`;
+    const diagnostics = testing.formatLogs([completeOutput], []);
+    expect(diagnostics).toContain("[output truncated to last");
+    expect(diagnostics).toContain("recent stdout");
+    expect(diagnostics).not.toContain("old stdout");
+    expect(diagnostics).not.toContain("�");
+    expect(Buffer.byteLength(diagnostics)).toBeLessThan(256 * 1024 + 100);
   });
 
   it("terminates UTF-8 log trimming within the byte cap", { timeout: 15_000 }, async () => {
