@@ -454,7 +454,7 @@ describe("chat pane placement", () => {
                 status: "available",
                 sessionHost: true,
                 workerSlots: { total: 1, available: 1 },
-                invocableCommands: ["codex.exec-server.stdio.v1"],
+                invocableCommands: ["codex.exec-server.stdio.v2"],
               },
             ],
           };
@@ -480,7 +480,7 @@ describe("chat pane placement", () => {
           devicePlacement:
             executionMode === "remote-exec"
               ? {
-                  requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+                  requiredNodeCommands: ["codex.exec-server.stdio.v2"],
                   consumesWorkerSlot: false,
                 }
               : { requiredNodeCommands: [], consumesWorkerSlot: true },
@@ -519,11 +519,11 @@ describe("chat pane placement", () => {
       runtimeId: "codex",
       executionMode: "remote-exec",
       devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommands: ["codex.exec-server.stdio.v2"],
         consumesWorkerSlot: false,
       },
       availableSlots: 0,
-      invocableCommands: ["codex.exec-server.stdio.v1"],
+      invocableCommands: ["codex.exec-server.stdio.v2"],
       disabled: false,
     },
     {
@@ -541,7 +541,7 @@ describe("chat pane placement", () => {
       runtimeId: "codex",
       executionMode: "remote-exec",
       devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        requiredNodeCommands: ["codex.exec-server.stdio.v2"],
         consumesWorkerSlot: false,
       },
       availableSlots: 1,
@@ -562,7 +562,7 @@ describe("chat pane placement", () => {
               status: "available",
               sessionHost: true,
               workerSlots: { total: 1, available: scenario.availableSlots },
-              capabilities: ["codex.exec-server.stdio.v1"],
+              capabilities: ["codex.exec-server.stdio.v2"],
               invocableCommands: scenario.invocableCommands,
             },
           ],
