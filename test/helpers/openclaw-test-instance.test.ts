@@ -205,6 +205,7 @@ if (kind === "refuse") { process.stderr.write(refusal + " fixture\\n"); process.
 if (kind === "late-refuse") {
   const delayed = spawn(process.execPath, ["-e", 'require("node:http").get(process.argv[1] + "/wait", (response) => { response.resume(); response.on("end", () => process.stderr.write(process.argv[2], () => process.exit(0))); });', controlUrl, refusal + " delayed fixture\\n"], { stdio: ["ignore", "ignore", "inherit"] });
   recordFixtureProcess(delayed.pid);
+  writeFileSync(tracePath + ".late-pid", String(delayed.pid));
   process.exit(1);
 }
 if (kind === "resist-after-exit") {
@@ -345,6 +346,43 @@ describe("openclaw test instance", () => {
       // Retain the failing assertion while releasing only this invocation's timers.
       for (const timer of timers.values()) {
         clearTimeout(timer);
+      }
+    }
+  });
+
+  it("captures CLI stderr written after the process exits", async () => {
+    const control = await createGatewayControl();
+    const { instance, tracePath, readAttempts } = await createFakeGateway(
+      "late-refuse",
+      1_000,
+      1_500,
+      control,
+    );
+    const command = trackOperation(instance.cli(["fixture"], { timeoutMs: 10_000 }));
+    let writerPid: number | undefined;
+    try {
+      await withTestTimeout(
+        control.reached,
+        5_000,
+        "CLI stderr fixture did not reach its release gate",
+      );
+      const [attempt] = await readAttempts();
+      writerPid = Number(await fs.readFile(`${tracePath}.late-pid`, "utf8"));
+      await waitForDead(attempt!.pid, 5_000);
+      // Release the inherited stderr writer only after the CLI leader has exited.
+      await control.release();
+      const result = await command;
+      expect(result).toEqual({
+        code: 1,
+        signal: null,
+        stdout: "fake gateway attempt 1\n",
+        stderr: `${MIGRATION_CONVERGENCE_REFUSAL} delayed fixture\n`,
+      });
+    } finally {
+      control.unblock();
+      await Promise.allSettled([command]);
+      if (writerPid !== undefined) {
+        await waitForDead(writerPid, 5_000);
       }
     }
   });

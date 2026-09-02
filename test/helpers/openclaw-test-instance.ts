@@ -685,7 +685,9 @@ async function runCommand(params: {
   const completed = await Promise.race([
     new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
       child.once("error", reject);
-      child.once("exit", (code, signal) => resolve({ code, signal }));
+      // The CLI leader can exit while a descendant still owns its output pipes.
+      // Keep the deadline active until close so the returned logs include that output.
+      child.once("close", (code, signal) => resolve({ code, signal }));
     }),
     sleep(params.timeoutMs, deadline.signal).then(() => null),
   ]).finally(() => deadline.abort());
