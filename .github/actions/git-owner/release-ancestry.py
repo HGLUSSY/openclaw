@@ -4,7 +4,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from ci_git_owner import FetchTimeout, GitFailure, backoff, cleanup_seconds, git_output, run_git
+from ci_git_owner import GitFailure, cleanup_seconds, git_output, run_git
 
 
 source_local_ref = "refs/remotes/origin/release-ancestry-source"
@@ -12,8 +12,6 @@ target_local_ref = "refs/remotes/origin/release-ancestry-target"
 deepen_chunks = (128, 256, 512, 1024, 2048)
 max_total_seconds = 120
 max_fetch_seconds = 30
-max_fetch_attempts = 3
-retry_backoff_seconds = 2
 workspace = os.getcwd()
 deadline = time.monotonic() + max_total_seconds
 
@@ -57,35 +55,22 @@ def resolve_commit(ref):
 
 
 def fetch_history(source_sha, target, depth_argument):
-    for attempt in range(1, max_fetch_attempts + 1):
-        try:
-            run_git(
-                workspace,
-                "-c",
-                "protocol.version=2",
-                "fetch",
-                "--atomic",
-                "--no-tags",
-                "--no-recurse-submodules",
-                "--filter=blob:none",
-                depth_argument,
-                "origin",
-                f"+{source_sha}:{source_local_ref}",
-                target,
-                timeout=operation_timeout(max_fetch_seconds),
-                reclaim_locks=True,
-            )
-            return
-        except (FetchTimeout, GitFailure):
-            if attempt == max_fetch_attempts:
-                raise
-            print(
-                f"::warning::Release ancestry fetch failed on attempt {attempt}; retrying.",
-                flush=True,
-            )
-            if operation_timeout() < retry_backoff_seconds:
-                raise TotalBudgetExpired()
-            backoff(retry_backoff_seconds)
+    run_git(
+        workspace,
+        "-c",
+        "protocol.version=2",
+        "fetch",
+        "--atomic",
+        "--no-tags",
+        "--no-recurse-submodules",
+        "--filter=blob:none",
+        depth_argument,
+        "origin",
+        f"+{source_sha}:{source_local_ref}",
+        target,
+        timeout=operation_timeout(max_fetch_seconds),
+        reclaim_locks=True,
+    )
 
 
 def repository_is_shallow():

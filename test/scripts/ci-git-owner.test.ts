@@ -382,54 +382,41 @@ exec "$REAL_GIT" "$@"`,
   }
 });
 
-releasePolicyIt.each([
-  { label: "timeout", failure: "hang" },
-  { label: "Git failure", failure: 23 },
-] as const)(
-  "retries a drained release ancestry fetch after $label",
-  async ({ failure }) => {
+releasePolicyIt(
+  "drains one timed-out release ancestry fetch and returns 124 without retry",
+  async () => {
     const report = await runCiGitStep({
-      policy: failure === "hang" ? fastReleaseAncestryPolicy : releaseAncestryPolicy,
+      policy: fastReleaseAncestryPolicy,
       env: {
         RELEASE_ANCESTRY_MODE: "merge-base",
         RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
       },
-      fetchResults: [failure, 0],
+      fetchResults: ["hang"],
       commandResults: {
         "rev-parse --verify HEAD^{commit}": { code: 0, output: `${head}\n` },
-        "rev-parse --verify refs/remotes/origin/release-ancestry-target^{commit}": {
-          code: 0,
-          output: `${base}\n`,
-        },
-        "rev-parse --is-shallow-repository": { code: 0, output: "false\n" },
-        [`merge-base ${head} ${base}`]: { code: 0, output: `${base}\n` },
       },
     });
-    expect(report.code, report.output).toBe(0);
-    expect(report.fetches).toHaveLength(2);
-    expect(report.output).toContain("fetch failed on attempt 1; retrying");
+    expect(report.code, report.output).toBe(124);
+    expect(report.fetches).toHaveLength(1);
   },
   55_000,
 );
 
-releasePolicyIt(
-  "preserves the final release ancestry Git failure after bounded retries",
-  async () => {
-    const report = await runCiGitStep({
-      policy: releaseAncestryPolicy,
-      env: {
-        RELEASE_ANCESTRY_MODE: "merge-base",
-        RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
-      },
-      fetchResults: [23, 23, 23],
-      commandResults: {
-        "rev-parse --verify HEAD^{commit}": { code: 0, output: `${head}\n` },
-      },
-    });
-    expect(report.code, report.output).toBe(23);
-    expect(report.fetches).toHaveLength(3);
-  },
-);
+releasePolicyIt("preserves a release ancestry Git failure without retry", async () => {
+  const report = await runCiGitStep({
+    policy: releaseAncestryPolicy,
+    env: {
+      RELEASE_ANCESTRY_MODE: "merge-base",
+      RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
+    },
+    fetchResults: [23],
+    commandResults: {
+      "rev-parse --verify HEAD^{commit}": { code: 0, output: `${head}\n` },
+    },
+  });
+  expect(report.code, report.output).toBe(23);
+  expect(report.fetches).toHaveLength(1);
+});
 
 releasePolicyIt("returns 124 when the release ancestry total budget is exhausted", async () => {
   const report = await runCiGitStep({
