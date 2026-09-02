@@ -62,6 +62,36 @@ async function safeReturnIterator(iterator: AsyncIterator<unknown>): Promise<voi
   }
 }
 
+function emitModelCallResultError(result: unknown, lifecycle: ModelCallLifecycle): boolean {
+  let error: Error;
+  try {
+    const message = isRecord(result) && result.type === "error" ? result.error : result;
+    if (
+      !isRecord(message) ||
+      (message.stopReason !== "error" && message.stopReason !== "aborted")
+    ) {
+      return false;
+    }
+    // Provider failures resolve as terminal messages, not rejected promises.
+    // Adapt only the error fields consumed by the existing redacted diagnostics.
+    error = Object.assign(
+      new Error(typeof message.errorMessage === "string" ? message.errorMessage : undefined),
+      {
+        code:
+          message.stopReason === "aborted"
+            ? "ABORT_ERR"
+            : typeof message.errorCode === "string"
+              ? message.errorCode
+              : undefined,
+      },
+    );
+  } catch {
+    return false;
+  }
+  lifecycle.emitError(error);
+  return true;
+}
+
 async function* observeModelCallIterator<T>(
   iterator: AsyncIterator<T>,
   lifecycle: ModelCallLifecycle,
@@ -79,6 +109,7 @@ async function* observeModelCallIterator<T>(
       }
       lifecycle.observer.observeResponseChunk(lifecycle.startedAt, next.value);
       lifecycle.observer.maybeEmitStreamProgress(lifecycle.eventBase);
+      emitModelCallResultError(next.value, lifecycle);
       yield next.value;
     }
     lifecycle.emitCompleted();
@@ -99,38 +130,26 @@ async function* observeModelCallIterator<T>(
   }
 }
 
-function observeModelCallFinalResult<T>(result: T, lifecycle: ModelCallLifecycle): T {
-  lifecycle.observer.observeFinalResult(lifecycle.eventBase, lifecycle.startedAt, result);
-  lifecycle.emitCompleted();
-  return result;
-}
-
-function createObservedResultFunction(
-  stream: unknown,
+function observeModelCallOperation(
+  operation: () => unknown,
   lifecycle: ModelCallLifecycle,
-): ((...args: unknown[]) => unknown) | undefined {
-  if (!isRecord(stream) || typeof stream.result !== "function") {
-    return undefined;
-  }
-  const resultFn = stream.result;
-  return (...args: unknown[]) => {
-    try {
-      const result = resultFn.apply(stream, args);
-      if (isPromiseLike(result)) {
-        return result.then(
-          (resolved) => observeModelCallFinalResult(resolved, lifecycle),
-          (err: unknown) => {
-            lifecycle.emitError(err);
-            throw err;
-          },
-        );
-      }
-      return observeModelCallFinalResult(result, lifecycle);
-    } catch (err) {
-      lifecycle.emitError(err);
-      throw err;
+): unknown {
+  try {
+    const result = operation();
+    if (isPromiseLike(result)) {
+      return result.then(
+        (resolved) => observeModelCallResult(resolved, lifecycle),
+        (err: unknown) => {
+          lifecycle.emitError(err);
+          throw err;
+        },
+      );
     }
-  };
+    return observeModelCallResult(result, lifecycle);
+  } catch (err) {
+    lifecycle.emitError(err);
+    throw err;
+  }
 }
 
 function observeModelCallStream<T extends AsyncIterable<unknown>>(
@@ -140,7 +159,12 @@ function observeModelCallStream<T extends AsyncIterable<unknown>>(
 ): T {
   const observedIterator = () =>
     observeModelCallIterator(createIterator(), lifecycle)[Symbol.asyncIterator]();
-  const observedResult = createObservedResultFunction(stream, lifecycle);
+  const resultFn = isRecord(stream) ? stream.result : undefined;
+  const observedResult =
+    typeof resultFn === "function"
+      ? (...args: unknown[]) =>
+          observeModelCallOperation(() => resultFn.apply(stream, args), lifecycle)
+      : undefined;
   let hasNonConfigurableIterator;
   try {
     hasNonConfigurableIterator =
@@ -173,7 +197,10 @@ function observeModelCallResult(result: unknown, lifecycle: ModelCallLifecycle):
   if (createIterator) {
     return observeModelCallStream(result as AsyncIterable<unknown>, createIterator, lifecycle);
   }
-  lifecycle.emitCompleted();
+  lifecycle.observer.observeFinalResult(lifecycle.eventBase, lifecycle.startedAt, result);
+  if (!emitModelCallResultError(result, lifecycle)) {
+    lifecycle.emitCompleted();
+  }
   return result;
 }
 
@@ -203,21 +230,9 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
         }),
     });
 
-    try {
-      const result = streamFn(model, streamContext, lifecycle.propagatedOptions);
-      if (isPromiseLike(result)) {
-        return result.then(
-          (resolved) => observeModelCallResult(resolved, lifecycle),
-          (err: unknown) => {
-            lifecycle.emitError(err);
-            throw err;
-          },
-        );
-      }
-      return observeModelCallResult(result, lifecycle);
-    } catch (err) {
-      lifecycle.emitError(err);
-      throw err;
-    }
+    return observeModelCallOperation(
+      () => streamFn(model, streamContext, lifecycle.propagatedOptions),
+      lifecycle,
+    );
   }) as StreamFn;
 }

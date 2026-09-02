@@ -17,7 +17,6 @@ import {
   type DesktopPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
 import { DesktopClient } from "./desktop-client.ts";
-import { resolveDesktopDocumentInventoryTarget } from "./desktop-document-inventory.ts";
 import { renderDesktopDocumentView } from "./desktop-document-view.ts";
 import { openDesktopFocus } from "./desktop-focus-window.ts";
 import { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
@@ -90,9 +89,21 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this,
     () => this.environmentId,
     (target) => {
-      this.returnToPicker();
-      this.sourceSelection = "pending";
+      if (this.sourceSelection === "picker") {
+        return;
+      }
+      this.returnToPicker("pending");
       void this.refreshEnvironments(undefined, target);
+    },
+    () => {
+      // Inventory refresh advances operationId; active viewers and credential prompts keep their owner.
+      if (
+        this.state === "picker" &&
+        !this.suppressed &&
+        (this.embedded ? this.presented : this.documentMode || this.dockLayout.open)
+      ) {
+        void this.refreshEnvironments();
+      }
     },
   );
   private readonly mobileKeyboard = new DesktopMobileKeyboard({
@@ -120,9 +131,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     }
     this.dockLayout.setSuppressed(this.suppressed);
-    if (this.documentMode && this.available) {
-      void this.refreshEnvironments();
-    } else if (!this.embedded && this.dockLayout.open) {
+    if ((this.documentMode && this.available) || (!this.embedded && this.dockLayout.open)) {
       void this.refreshEnvironments();
     }
   }
@@ -161,8 +170,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       changed.has("documentControl");
     if ((this.documentMode || this.embedded) && presentationChanged) {
       // Release input and invalidate pending work before resolving a different session or machine.
-      this.returnToPicker();
-      this.sourceSelection = "pending";
+      this.returnToPicker("pending");
       if (this.available && (!this.embedded || (this.presented && this.refreshOnPresentation))) {
         void this.refreshEnvironments();
       }
@@ -199,9 +207,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       if (detail?.environmentId) {
         void this.connectRequestedEnvironment(detail.environmentId);
       } else {
-        this.returnToPicker();
         // An untargeted shell command opens the picker, overriding this presentation's session default.
-        this.sourceSelection = "picker";
+        this.returnToPicker();
         void this.refreshEnvironments();
       }
       return;
@@ -232,11 +239,12 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     this.dockLayout.setOpen(false);
   }
 
-  private returnToPicker(): void {
+  private returnToPicker(sourceSelection: typeof this.sourceSelection = "picker"): void {
     this.sessionSource.invalidate();
     this.disconnectConnection();
     this.clearLaunchState();
     this.state = "picker";
+    this.sourceSelection = sourceSelection;
     this.environmentId = null;
     this.source = null;
     this.credentials = undefined;
@@ -267,6 +275,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     if (!client || !this.available || (this.embedded && !this.presented)) {
       return false;
     }
+    this.sessionSource.invalidate();
     const operationId = expectedOperationId ?? ++this.operationId;
     this.loading = true;
     this.errorText = null;
@@ -291,44 +300,27 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         this.loading = false;
       }
     }
-    if (refreshed) {
-      await this.resolveRequestedSource(operationId, resolvedSessionTarget);
+    if (refreshed && this.sourceSelection === "pending") {
+      await this.sessionSource.resolveInventoryTarget(
+        this.environments,
+        async (requestedSource) => {
+          if (operationId !== this.operationId) {
+            return;
+          }
+          if (requestedSource !== null) {
+            await this.connectEnvironment(requestedSource, this.documentControl);
+          } else if (this.requestedSource !== null || this.sessionKey !== null) {
+            this.noticeText = t("desktop.sourceUnavailable");
+          }
+        },
+        resolvedSessionTarget,
+      );
     }
     return refreshed;
   }
 
-  private async resolveRequestedSource(
-    operationId: number,
-    resolvedSessionTarget?: string | null,
-  ): Promise<void> {
-    if (this.sourceSelection !== "pending" || operationId !== this.operationId) {
-      return;
-    }
-    this.sourceSelection = "resolved";
-    const requestedSource = await resolveDesktopDocumentInventoryTarget({
-      client: this.client,
-      source: this.requestedSource,
-      // Embedded presenters already receive the chat owner's current placement; do not rediscover it.
-      sessionKey: this.documentMode ? this.sessionKey : null,
-      environments: this.environments,
-      resolvedSessionTarget,
-    });
-    if (operationId !== this.operationId) {
-      return;
-    }
-    if (requestedSource === null) {
-      if (this.requestedSource !== null || this.sessionKey !== null) {
-        this.state = "picker";
-        this.noticeText = t("desktop.sourceUnavailable");
-      }
-      return;
-    }
-    await this.connectEnvironment(requestedSource, this.documentControl);
-  }
-
   private async connectRequestedEnvironment(environmentId: string): Promise<void> {
-    this.returnToPicker();
-    this.sourceSelection = "resolved";
+    this.returnToPicker("resolved");
     this.environmentId = environmentId;
     this.state = "connecting";
     const operationId = this.operationId;
@@ -352,6 +344,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     if (!client || !this.available || (this.embedded && !this.presented)) {
       return;
     }
+    this.sourceSelection = "resolved";
     if (this.environmentId !== environmentId) {
       this.clearLaunchState();
       this.credentials = undefined;
@@ -682,9 +675,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       return nothing;
     }
     const dock = this.dockLayout.dock;
-    const style = this.embedded
-      ? ""
-      : this.fullscreenMode.active
+    const style =
+      this.embedded || this.fullscreenMode.active
         ? ""
         : dock === "bottom"
           ? `height:${this.dockLayout.height}px`

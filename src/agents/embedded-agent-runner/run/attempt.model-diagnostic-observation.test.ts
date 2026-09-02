@@ -643,57 +643,70 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents observation", () => {
     expect(JSON.stringify(events)).not.toContain("private tool description");
   });
 
-  it("captures per-call usage from terminal error events", async () => {
-    // Aborted/error streams terminate with an `error` event carrying the final
-    // AssistantMessage and its usage. Iterating to completion without awaiting
-    // result() must still surface per-call usage, matching the `done` path and
-    // the usage field already emitted on model.call.error and its OTel span.
-    const assistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "partial reply" }],
-      usage: {
+  it.each([
+    { stopReason: "error", failureKind: "connection_reset" },
+    { stopReason: "aborted", failureKind: "aborted" },
+  ])(
+    "records $stopReason events with usage and private error metadata",
+    async ({ stopReason, failureKind }) => {
+      // Aborted/error streams terminate with an `error` event carrying the final
+      // AssistantMessage and its usage. Iterating to completion without awaiting
+      // result() must still surface per-call usage, matching the `done` path and
+      // the usage field already emitted on model.call.error and its OTel span.
+      const assistant = {
+        role: "assistant",
+        content: [{ type: "text", text: "partial reply" }],
+        usage: {
+          input: 11,
+          output: 7,
+          cacheRead: 3,
+          cacheWrite: 2,
+          reasoningTokens: 5,
+          totalTokens: 28,
+        },
+        stopReason,
+        errorMessage: "synthetic-private-error [request_id=req_error_usage]",
+        errorCode: "ECONNRESET",
+        timestamp: 1,
+      };
+      async function* stream() {
+        yield { type: "error", reason: stopReason, error: assistant };
+      }
+      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+        (() => stream()) as unknown as StreamFn,
+        {
+          runId: "run-1",
+          provider: "openrouter",
+          model: "openrouter/auto",
+          trace: createDiagnosticTraceContext(),
+          nextCallId: () => "call-error-usage",
+        },
+      );
+
+      const entries = await collectTrustedModelCallEvents(async () => {
+        await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+      });
+      const events = entries.map(({ event }) => event);
+      expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);
+      const errorEvent = getEvent(events, 1);
+      expect(errorEvent.errorCategory).toBe("Error");
+      expect(errorEvent.failureKind).toBe(failureKind);
+      expect(errorEvent.upstreamRequestIdHash).toMatch(/^sha256:[a-f0-9]{12}$/);
+      expect(errorEvent.usage).toEqual({
         input: 11,
         output: 7,
         cacheRead: 3,
         cacheWrite: 2,
         reasoningTokens: 5,
-        totalTokens: 28,
-      },
-      stopReason: "aborted",
-      timestamp: 1,
-    };
-    async function* stream() {
-      yield { type: "error", reason: "aborted", error: assistant };
-    }
-    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
-      (() => stream()) as unknown as StreamFn,
-      {
-        runId: "run-1",
-        provider: "openrouter",
-        model: "openrouter/auto",
-        trace: createDiagnosticTraceContext(),
-        nextCallId: () => "call-error-usage",
-      },
-    );
-
-    const events = await collectModelCallEvents(async () => {
-      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
-    });
-
-    // An in-band error event is data, not a throw, so iteration completes
-    // normally; the per-call usage rides on the terminal completion event.
-    const completedEvent = getEvent(events, 1);
-    expect(completedEvent.type).toBe("model.call.completed");
-    expect(completedEvent.usage).toEqual({
-      input: 11,
-      output: 7,
-      cacheRead: 3,
-      cacheWrite: 2,
-      reasoningTokens: 5,
-      total: 28,
-      promptTokens: 16,
-    });
-  });
+        total: 28,
+        promptTokens: 16,
+      });
+      expect(entries[1]?.privateData.modelContent).toBeUndefined();
+      expect(JSON.stringify(entries)).not.toContain("synthetic-private-error");
+      expect(JSON.stringify(entries)).not.toContain("req_error_usage");
+      expect(JSON.stringify(entries)).not.toContain("partial reply");
+    },
+  );
 
   it("skips prompt stat computation when diagnostics are disabled", async () => {
     // Prompt stats are only attached to diagnostic events; when diagnostics are
