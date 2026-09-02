@@ -433,6 +433,7 @@ export function discoverSkillCandidates(params: {
   source: string;
   limits: ResolvedSkillDiscoveryLimits;
   allowedSymlinkTargetRealPaths: readonly string[];
+  ignoreRootSkill?: boolean;
 }): DiscoveredSkillCandidates {
   const rootDir = path.resolve(params.dir);
   if (!fs.existsSync(rootDir)) {
@@ -456,7 +457,7 @@ export function discoverSkillCandidates(params: {
   }
 
   const rootSkillMd = path.join(baseDir, "SKILL.md");
-  if (hasSkillFileCandidate(baseDir)) {
+  if (hasSkillFileCandidate(baseDir) && !params.ignoreRootSkill) {
     const rootSkillRealPath = resolveSkillFilePath({
       source: params.source,
       skillDir: baseDir,
@@ -520,7 +521,11 @@ export function discoverSkillCandidates(params: {
   }
 
   let configuredRootCandidate: CandidateSkillDir | undefined;
-  if (path.resolve(baseDir) !== rootDir && hasSkillFileCandidate(rootDir)) {
+  if (
+    !params.ignoreRootSkill &&
+    path.resolve(baseDir) !== rootDir &&
+    hasSkillFileCandidate(rootDir)
+  ) {
     const configuredRootSkillRealPath = resolveSkillFilePath({
       source: params.source,
       skillDir: rootDir,

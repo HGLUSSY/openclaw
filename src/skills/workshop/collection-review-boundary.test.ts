@@ -263,6 +263,61 @@ describe("skill collection review boundary", () => {
     }
   });
 
+  it("ignores a root-level SKILL.md during collection review", async () => {
+    const testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-skill-collection-review-root-skill-",
+    });
+    const workspaceDir = await tempDirs.make("openclaw-skill-collection-review-root-skill-");
+    const skillsRoot = resolveWorkshopSkillsDir(testState.env);
+    const rootSkill = path.join(skillsRoot, "SKILL.md");
+    const realSkill = path.join(skillsRoot, "real", "SKILL.md");
+    try {
+      await writeSkill(skillsRoot, "real", "Real procedure", "# Before\n");
+      const result = await runSkillCollectionReviewForAgent({
+        config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+        agentId: "main",
+        job: createReviewJob("skill-review-root-skill"),
+        env: testState.env,
+        runTurn: async () => {
+          await fs.writeFile(
+            rootSkill,
+            "---\nname: ignored\ndescription: Ignored\n---\n\n# Ignored\n",
+          );
+          await fs.writeFile(
+            realSkill,
+            "---\nname: real\ndescription: Real procedure\n---\n\n# After\n",
+          );
+          return { status: "ok", summary: "reviewed", outputText: "" };
+        },
+      });
+
+      expect(result.status).toBe("ok");
+      expect(listSkillCollectionReviewOutcomes({ env: testState.env })[0]).toMatchObject({
+        written: ["real"],
+        dropped: [],
+      });
+      const backupId = await latestCommittedBackupId(
+        resolveSkillCollectionBackupRoot(testState.env),
+      );
+      expect(backupId).toBeDefined();
+      if (backupId) {
+        const manifest = await fs.readFile(
+          path.join(resolveSkillCollectionBackupRoot(testState.env), backupId, "manifest.json"),
+          "utf8",
+        );
+        expect(manifest).not.toContain('"."');
+      }
+      await expect(
+        restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
+      ).resolves.toMatchObject({ restored: ["real"] });
+      await expect(fs.readFile(realSkill, "utf8")).resolves.toContain("# Before");
+    } finally {
+      await testState.cleanup();
+      await tempDirs.cleanup();
+    }
+  });
+
   it("restores an existing skill that becomes unloadable without dropping it", async () => {
     const testState = await createOpenClawTestState({
       layout: "state-only",

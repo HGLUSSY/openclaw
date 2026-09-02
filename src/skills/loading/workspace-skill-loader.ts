@@ -303,6 +303,7 @@ export function loadSkillRootRecords(params: {
   source: string;
   config?: OpenClawConfig;
   rejectHardlinks?: boolean;
+  ignoreRootSkill?: boolean;
 }): LoadedSkillRecord[] {
   const limits = resolveSkillDiscoveryLimits(params.config);
   const rejectHardlinks =
@@ -317,6 +318,7 @@ export function loadSkillRootRecords(params: {
     source: params.source,
     limits,
     allowedSymlinkTargetRealPaths: resolveAllowedSkillSymlinkTargetRealPaths(params.config),
+    ignoreRootSkill: params.ignoreRootSkill,
   });
   const maxSkillsLoadedPerSource = Math.max(0, limits.maxSkillsLoadedPerSource);
   const loadCandidate = (candidate: CandidateSkillDir) =>
@@ -327,7 +329,7 @@ export function loadSkillRootRecords(params: {
       canonicalSkillDir: canonicalSkillDirForSource(params.source, candidate.skillDirRealPath),
       rejectHardlinks,
     });
-  if (discovered.configuredRootCandidate) {
+  if (discovered.configuredRootCandidate && !params.ignoreRootSkill) {
     const rootRecords = loadCandidate(discovered.configuredRootCandidate);
     if (rootRecords.length > 0) {
       return rootRecords;

@@ -178,7 +178,7 @@ function resolveWorkshopSkillDirectory(
     }
     directory = parent;
   }
-  return skillDirs.has(".") ? "." : ownDirectory;
+  return ownDirectory;
 }
 
 async function scanWorkshopReviewFile(

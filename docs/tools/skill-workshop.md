@@ -129,6 +129,8 @@ The review prompt asks the agent to stay inside the Workshop directory. The
 agent edits files directly during this scheduled turn. A full-tree snapshot is
 created before the turn; changed or added `SKILL.md` files are scanned after it,
 and a failing file is restored from the snapshot while other safe changes stay.
+A `SKILL.md` placed directly in the Workshop root is ignored; skills live in
+subdirectories.
 The review runs on the embedded runtime only; model fallback candidates that
 use CLI runtimes are skipped for this job.
 There is no skill-count admission cap like the old 200-skill limit. The inventory is bounded to 10,000 files and six directory levels. A larger tree fails the review with a recorded error; split or prune the Workshop directory by hand before running it again.
