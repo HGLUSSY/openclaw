@@ -445,8 +445,12 @@ text. The hook does not include the inbound message body or media.
 
 ## Debug runtime hooks
 
-Use `before_model_resolve` to switch provider or model for an agent turn - it
-runs before model resolution. `llm_output` describes an attempt's output when
+Use `before_model_resolve` to switch provider, model, or thinking level for an
+agent turn - it runs before model resolution. A returned `thinkingOverride`
+applies only to the current turn and does not change stored session thinking.
+An explicit thinking level in the current user message takes precedence.
+Existing model-selection locks continue to bypass this hook entirely.
+`llm_output` describes an attempt's output when
 the runtime emits it; `assistantTexts` can be empty and `lastAssistant` absent,
 so the event alone does not prove a successful final answer.
 
@@ -746,7 +750,8 @@ not prompt content:
 Use the phase-specific hooks for new plugins:
 
 - `before_model_resolve`: receives only the current prompt and attachment
-  metadata. Return `providerOverride` or `modelOverride`.
+  metadata. Return `providerOverride`, `modelOverride`, or the typed,
+  turn-local `thinkingOverride`.
 - `agent_turn_prepare`: receives the current prompt, prepared session
   messages, and queued injections consumed for this session.
   Return `prependContext` or `appendContext`.

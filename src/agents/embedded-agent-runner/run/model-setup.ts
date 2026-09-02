@@ -39,6 +39,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
   });
   const modelSelectionChangedByHook =
     hookSelection.provider !== params.provider || hookSelection.modelId !== params.modelId;
+  const thinkingOverride = hookSelection.thinkingOverride;
   let provider = hookSelection.provider;
   const modelId = hookSelection.modelId;
   const requestedModelId = modelId;
@@ -152,6 +153,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
     modelId,
     requestedModelId,
     modelSelectionChangedByHook,
+    thinkingOverride,
     requestStreamTransportOverrides,
     expectedHarnessArtifact,
     agentHarness,
