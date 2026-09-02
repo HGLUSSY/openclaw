@@ -52,7 +52,11 @@ export class DesktopSessionController {
           if (!host.isConnected || !host.available || client !== host.client) {
             return;
           }
-          if (event.event === "presence") {
+          if (
+            event.event === "presence" ||
+            event.event === "node.pair.resolved" ||
+            event.event === "node.runnerInventory.changed"
+          ) {
             this.onInventoryChange();
             return;
           }

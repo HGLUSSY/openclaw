@@ -152,9 +152,23 @@ describe("embedded desktop panel presentation", () => {
     expect(request.mock.calls.some(([method]) => method === "sessions.describe")).toBe(false);
   });
 
-  it.each(["session", "source", "embedded", "picker", "floating"] as const)(
-    "discovers a late node after Gateway reconnect in the %s presenter without retaining credentials",
-    async (presentation) => {
+  it.each(
+    (["session", "source", "embedded", "picker", "floating"] as const).flatMap((presentation) =>
+      [
+        {
+          event: "presence",
+          payload: { presence: [{ deviceId: "workstation", roles: ["node"], reason: "connect" }] },
+        },
+        {
+          event: "node.pair.resolved",
+          payload: { nodeId: "workstation", requestId: "surface", decision: "approved", ts: 1 },
+        },
+        { event: "node.runnerInventory.changed", payload: { nodeId: "workstation" } },
+      ].map(({ event, payload }) => ({ presentation, event, payload })),
+    ),
+  )(
+    "discovers a late node on $event in the $presentation presenter without retaining credentials",
+    async ({ presentation, event, payload }) => {
       const node = { id: "node:workstation", type: "node", status: "available", desktop: true };
       const sessionKey = "agent:main:desktop";
       const picker = presentation === "picker" || presentation === "floating";
@@ -246,10 +260,15 @@ describe("embedded desktop panel presentation", () => {
         request.mock.calls.filter(([method]) => method === "desktop.observe");
       expect(observations()).toHaveLength(2);
 
-      online = true;
+      // Connection precedes approval: the first inventory still has no usable desktop.
       gateway.emit("presence", {
         presence: [{ deviceId: "workstation", roles: ["node"], reason: "connect" }],
       });
+      await settleTasks();
+      expect(panel.renderRoot.querySelectorAll(".desktop-environment")).toHaveLength(0);
+      expect(observations()).toHaveLength(2);
+      online = true;
+      gateway.emit(event, payload);
       if (picker) {
         await waitForFast(() =>
           expect(
@@ -266,7 +285,7 @@ describe("embedded desktop panel presentation", () => {
       });
       expect(reconnected.username.value).toBe("");
       expect(reconnected.password.value).toBe("");
-      gateway.emit("presence", { presence: [] });
+      gateway.emit(event, payload);
       await settleTasks();
       expect(observations()).toHaveLength(3);
       expect(connect).toHaveBeenCalledOnce();
