@@ -179,8 +179,19 @@ jobs:
           set -euo pipefail
           # Ratchets compare against the real main merge base; fetch those two
           # histories without collecting every remote branch or release tag.
-          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --filter=blob:none --unshallow origin \
-            "$(git rev-parse HEAD)" "+refs/heads/main:refs/remotes/origin/main"
+          source_sha="$(git rev-parse HEAD)"
+          main_ref="refs/remotes/origin/main"
+          fetch_refs=("$source_sha" "+refs/heads/main:${main_ref}")
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --filter=blob:none --depth=50 origin \
+            "${fetch_refs[@]}"
+          if ! git merge-base "$source_sha" "$main_ref" >/dev/null; then
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --filter=blob:none --deepen=50 origin \
+              "${fetch_refs[@]}"
+          fi
+          if ! git merge-base "$source_sha" "$main_ref" >/dev/null; then
+            echo "Unable to establish source merge base with main after bounded history fetch." >&2
+            exit 1
+          fi
           pnpm check --include-test-types --include-architecture
 
       - name: Seal source-check evidence
@@ -225,9 +236,16 @@ jobs:
             exit 1
           fi
           alpha_branch="${WORKFLOW_REF#refs/heads/}"
-          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --filter=blob:none --unshallow origin \
-            "$(git rev-parse HEAD)" "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
-          if ! git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
+          target_sha="$(git rev-parse HEAD)"
+          alpha_ref="refs/remotes/origin/${alpha_branch}"
+          fetch_refs=("$target_sha" "+refs/heads/${alpha_branch}:${alpha_ref}")
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --filter=blob:none --depth=50 origin \
+            "${fetch_refs[@]}"
+          if ! git merge-base --is-ancestor "$target_sha" "$alpha_ref"; then
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --filter=blob:none --deepen=50 origin \
+              "${fetch_refs[@]}"
+          fi
+          if ! git merge-base --is-ancestor "$target_sha" "$alpha_ref"; then
             echo "Alpha preflight target must be reachable from ${alpha_branch}." >&2
             exit 1
           fi

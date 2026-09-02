@@ -140,6 +140,33 @@ describe("minimal npm extended-stable workflow", () => {
     ).toBe(true);
   });
 
+  it("hydrates only bounded ancestry for source and Tideclaw checks", () => {
+    const parsed = workflow(preflightWorkflowPath);
+    const sourceCheck = step(
+      parsed.jobs?.check_openclaw_npm,
+      "Check source, test types, and architecture",
+    ).run;
+    const tideclawCheck = step(
+      parsed.jobs?.prepare_openclaw_npm,
+      "Validate Tideclaw alpha preflight target",
+    ).run;
+    const metadata = step(parsed.jobs?.check_dependencies_npm, "Validate release metadata").run;
+
+    for (const run of [sourceCheck, tideclawCheck]) {
+      expect(run).not.toContain("--unshallow");
+      expect(run?.match(/--depth=50/gu)).toHaveLength(1);
+      expect(run?.match(/--deepen=50/gu)).toHaveLength(1);
+      expect(run).toContain("timeout --signal=TERM --kill-after=10s 120s git fetch");
+    }
+    expect(sourceCheck).toContain('if ! git merge-base "$source_sha" "$main_ref"');
+    expect(sourceCheck).toContain("Unable to establish source merge base with main");
+    expect(tideclawCheck).toContain('if ! git merge-base --is-ancestor "$target_sha" "$alpha_ref"');
+    expect(metadata).toContain("--unshallow origin");
+    expect(metadata).toContain('"+refs/tags/v*:refs/tags/v*"');
+    expect(metadata).not.toContain("--depth=50");
+    expect(metadata).not.toContain("--deepen=50");
+  });
+
   it("adds extended-stable without adding policy or verifier contracts", () => {
     const raw = readFileSync(workflowPath, "utf8");
     const parsed = workflow();
