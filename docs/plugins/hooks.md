@@ -780,8 +780,9 @@ ordinary `before_prompt_build` → finalized tool policy → authorized prompt
 enrichment. `agent_turn_prepare` and queued-injection draining are not currently
 wired into the Codex or Copilot prompt paths.
 
-For multiple registrations, the first defined provider/model override and
-`systemPrompt` win. Context additions concatenate in priority order, and tool
+For multiple registrations, the first defined `providerOverride`, `modelOverride`,
+`thinkingOverride`, and `systemPrompt` win (higher-priority hooks run first).
+Context additions concatenate in priority order, and tool
 restrictions intersect. A nested ordinary `before_prompt_build` dispatch on
 the same runner is skipped while its outer dispatch is active; other hook
 families and independent turns remain available.
