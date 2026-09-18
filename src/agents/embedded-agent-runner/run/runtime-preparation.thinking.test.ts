@@ -285,6 +285,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
         thinkLevelExplicit: params.thinkLevelExplicit,
       };
       const runtime = await prepareEmbeddedRunRuntime({
+        assertCurrent: () => {},
         runParams,
         provider: "openai",
         modelId: DEFAULT_MODEL_ID,
