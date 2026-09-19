@@ -19,6 +19,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { projectModelContextMessages } from "../shared/model-context-message.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
+import { mergeBeforeModelResolveResults } from "./hook-before-model-resolve.js";
 import {
   type GateHookResult,
   type InputGateDecision,
@@ -39,7 +40,6 @@ import type {
   PluginHookBeforeDispatchResult,
   PluginHookHandlerMap,
   PluginHookReplyPayload,
-  PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookInboundClaimContext,
@@ -420,16 +420,6 @@ export function createHookRunner(
       : clonedPayload;
     return copyReplyPayloadMetadata(previous, acceptedPayload);
   };
-
-  const mergeBeforeModelResolve = (
-    acc: PluginHookBeforeModelResolveResult | undefined,
-    next: PluginHookBeforeModelResolveResult,
-  ): PluginHookBeforeModelResolveResult => ({
-    // Keep the first defined override so higher-priority hooks win.
-    modelOverride: firstDefined(acc?.modelOverride, next.modelOverride),
-    providerOverride: firstDefined(acc?.providerOverride, next.providerOverride),
-    thinkingOverride: firstDefined(acc?.thinkingOverride, next.thinkingOverride),
-  });
 
   const normalizeHookToolsAllow = (value: unknown): string[] | undefined => {
     if (value === undefined) {
@@ -1495,7 +1485,7 @@ export function createHookRunner(
   return {
     // Agent hooks
     runBeforeModelResolve: bindModifyingHook("before_model_resolve", {
-      mergeResults: mergeBeforeModelResolve,
+      mergeResults: mergeBeforeModelResolveResults,
     }),
     runAgentTurnPrepare: bindModifyingHook("agent_turn_prepare", {
       mergeResults: mergeAgentTurnPrepare,
