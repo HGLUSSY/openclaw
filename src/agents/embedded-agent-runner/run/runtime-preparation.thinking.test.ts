@@ -268,6 +268,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
       modelId: string;
       thinkingOverride?: ThinkLevel;
       thinkLevelExplicit?: boolean;
+      thinkLevel?: ThinkLevel;
     }) => {
       const runParams = {
         runId: params.runId,
@@ -281,7 +282,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
         config: preparedModelRuntime.config,
         authProfileId: "openai:subscription",
         authProfileIdSource: "user" as const,
-        thinkLevel: "low" as const,
+        thinkLevel: params.thinkLevel ?? ("low" as const),
         thinkLevelExplicit: params.thinkLevelExplicit,
       };
       const runtime = await prepareEmbeddedRunRuntime({
@@ -306,7 +307,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
         preparedModelRuntime,
       });
       try {
-        expect(runParams.thinkLevel).toBe("low");
+        expect(runParams.thinkLevel).toBe(params.thinkLevel ?? "low");
         return runtime.snapshot().thinkLevel;
       } finally {
         runtime.stopRuntimeAuthRefreshTimer();
@@ -333,6 +334,22 @@ describe("selected route thinking metadata at runtime preparation", () => {
         thinkLevelExplicit: true,
       }),
     ).resolves.toBe("low");
+    await expect(
+      run({
+        runId: "explicit-default-turn-thinking",
+        modelId: ROUTED_MODEL_ID,
+        thinkingOverride: "xhigh",
+        thinkLevelExplicit: true,
+        thinkLevel: "medium",
+      }),
+    ).resolves.toBe("medium");
+    await expect(
+      run({
+        runId: "turn-after-default-reset",
+        modelId: ROUTED_MODEL_ID,
+        thinkingOverride: "xhigh",
+      }),
+    ).resolves.toBe("xhigh");
     await expect(
       run({
         runId: "unsupported-route-thinking",

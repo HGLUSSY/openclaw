@@ -17,7 +17,10 @@ plugin-owned session state. Part of the [Plugin hooks](/plugins/hooks) guide.
 Use `before_model_resolve` to switch provider, model, or thinking level for an
 agent turn - it runs before model resolution. A returned `thinkingOverride`
 applies only to the current turn and does not change stored session thinking.
-An explicit thinking level in the current user message takes precedence.
+An explicit thinking choice in the current user message, including
+`/think default`, takes precedence. Otherwise the hook choice takes precedence
+over stored session thinking and configured defaults. OpenClaw validates it
+against the final selected model and runtime.
 Existing model-selection locks continue to bypass this hook entirely.
 `llm_output` describes an attempt's output when
 the runtime emits it; `assistantTexts` can be empty and `lastAssistant` absent,

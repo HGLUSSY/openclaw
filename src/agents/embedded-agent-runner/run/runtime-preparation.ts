@@ -225,22 +225,22 @@ export async function prepareEmbeddedRunRuntime(input: {
     ? activePreparedAuthPlan.forwardedAuthProfileId
     : undefined;
   const requestedThinkLevel = resolveInitialThinkLevel({
-    requested: params.thinkLevelExplicit
-      ? params.thinkLevel
-      : (thinkingOverride ?? params.thinkLevel),
+    requested: params.thinkLevel,
     config: params.config,
     agentId: params.agentId,
     provider,
     modelId,
     model: models.effective,
   });
+  const hookThinkLevel = params.thinkLevelExplicit ? undefined : thinkingOverride;
+  const effectiveRequestedThinkLevel = hookThinkLevel ?? requestedThinkLevel;
   const initialThinkLevel =
-    modelSelectionChangedByHook || thinkingOverride !== undefined
+    modelSelectionChangedByHook || hookThinkLevel !== undefined
       ? (resolveCandidateThinkingLevel({
           cfg: params.config,
           provider,
           modelId,
-          level: requestedThinkLevel,
+          level: effectiveRequestedThinkLevel,
           catalog: [
             {
               provider,
@@ -254,8 +254,8 @@ export async function prepareEmbeddedRunRuntime(input: {
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           agentRuntime: agentHarness.id,
-        }) ?? requestedThinkLevel)
-      : requestedThinkLevel;
+        }) ?? effectiveRequestedThinkLevel)
+      : effectiveRequestedThinkLevel;
   const attemptedThinking = new Set<ThinkLevel>();
   const authState: EmbeddedRunAuthState = {
     models,

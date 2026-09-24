@@ -1,6 +1,7 @@
 /**
  * Resolves hook-selected model state and pre-model attachments for a run.
  */
+import { normalizeThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
@@ -133,10 +134,16 @@ export async function resolveHookModelSelection(params: {
     log.info(`[hooks] model overridden to ${modelId}`);
   }
 
+  const thinkingOverride = normalizeThinkLevel(
+    typeof modelResolveOverride?.thinkingOverride === "string"
+      ? modelResolveOverride.thinkingOverride
+      : undefined,
+  );
+
   return {
     provider,
     modelId,
-    thinkingOverride: modelResolveOverride?.thinkingOverride,
+    ...(thinkingOverride !== undefined ? { thinkingOverride } : {}),
   };
 }
 
