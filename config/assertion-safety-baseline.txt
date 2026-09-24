@@ -966,7 +966,7 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-directives.ts	4
 extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	4
 extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	6
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	2
-extensions/qa-lab/src/providers/mock-openai/server.ts	8
+extensions/qa-lab/src/providers/mock-openai/server.ts	6
 extensions/qa-lab/src/providers/shared/auth-store.ts	1
 extensions/qa-lab/src/qa-transport.ts	1
 extensions/qa-lab/src/run-config.ts	2
@@ -2257,7 +2257,6 @@ src/commands/doctor-sandbox.ts	4
 src/commands/doctor-security.ts	3
 src/commands/doctor-session-canonical-keys.ts	1
 src/commands/doctor-session-incognito-key-repair-state.ts	8
-src/commands/doctor-session-incognito-key-repair.ts	4
 src/commands/doctor-session-snapshots.ts	4
 src/commands/doctor-session-sqlite-compact.ts	1
 src/commands/doctor-session-sqlite-recover-report.ts	1
@@ -2308,7 +2307,7 @@ src/commands/doctor/shared/legacy-talk-config-normalizer.ts	2
 src/commands/doctor/shared/legacy-web-tools-migrate.ts	1
 src/commands/doctor/shared/open-policy-allowfrom.ts	2
 src/commands/doctor/shared/plugin-runtime-symlinks.ts	4
-src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	2
+src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	1
 src/commands/doctor/shared/pristine-startup-state.ts	3
 src/commands/doctor/shared/stale-agent-model-ref-repair.ts	3
 src/commands/doctor/shared/stale-auth-order-store.ts	3
