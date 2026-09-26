@@ -33,17 +33,22 @@ import { buildAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
 import { cliBackendLog } from "../cli-runner/log.js";
+import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 const CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS = 500;
 
-export function resolveAttemptThinkingParams(
-  thinkLevel: ThinkLevel | undefined,
-  options: { thinking?: string; thinkingOnce?: string },
-) {
+export function resolveAttemptRouteParams(params: {
+  modelOverride: string;
+  modelRoutingProvenance: ModelFallbackAttemptProvenance;
+  resolvedThinkLevel: ThinkLevel | undefined;
+  opts: { thinking?: string; thinkingOnce?: string };
+}) {
   return {
-    thinkLevel,
-    thinkLevelExplicit: Boolean(options.thinking || options.thinkingOnce),
+    model: params.modelOverride,
+    modelRoutingProvenance: params.modelRoutingProvenance,
+    thinkLevel: params.resolvedThinkLevel,
+    thinkLevelExplicit: Boolean(params.opts.thinking || params.opts.thinkingOnce),
   };
 }
 
@@ -51,6 +56,7 @@ export function shouldSuppressEmbeddedLiveStreamOutput(options: {
   sessionEffects?: "visible" | "internal";
   deliver?: boolean;
 }): boolean {
+  // Hidden internal runs lack an event consumer; visible lanes still feed UI and parent relays.
   return options.sessionEffects === "internal" && options.deliver !== true;
 }
 
@@ -464,20 +470,6 @@ export function createAcpVisibleTextAccumulator() {
     return `${base}${chunk}`;
   };
 
-  const mergeVisibleChunk = (base: string, chunk: string): { rawText: string; delta: string } => {
-    if (!base) {
-      return { rawText: chunk, delta: chunk };
-    }
-    if (chunk.startsWith(base) && chunk.length > base.length) {
-      const delta = chunk.slice(base.length);
-      return { rawText: chunk, delta };
-    }
-    return {
-      rawText: `${base}${chunk}`,
-      delta: chunk,
-    };
-  };
-
   return {
     consume(chunk: string): { text: string; delta: string } | null {
       if (!chunk) {
@@ -516,13 +508,13 @@ export function createAcpVisibleTextAccumulator() {
         }
       }
 
-      const nextVisible = mergeVisibleChunk(rawVisibleText, chunk);
-      rawVisibleText = nextVisible.rawText;
-      if (!nextVisible.delta) {
-        return null;
-      }
-      visibleText = `${visibleText}${nextVisible.delta}`;
-      return { text: visibleText, delta: nextVisible.delta };
+      const delta =
+        chunk.startsWith(rawVisibleText) && chunk.length > rawVisibleText.length
+          ? chunk.slice(rawVisibleText.length)
+          : chunk;
+      rawVisibleText += delta;
+      visibleText += delta;
+      return { text: visibleText, delta };
     },
     finalize(): string {
       return visibleText.trim();

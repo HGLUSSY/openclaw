@@ -1,3 +1,4 @@
+import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import type { WorkerProvider } from "../../plugins/types.js";
@@ -151,8 +152,27 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       inState(record, "ready", "idle", "attached") &&
       record.desktop !== null;
     const nodeTunnelStatus = nodeTunnels?.status(record.environmentId);
+    const preparedProject = record.preparation
+      ? readWorkerProjectSnapshot(record.profileSnapshot.project)
+      : undefined;
+    const projectLabel = preparedProject
+      ? "source" in preparedProject
+        ? normalizeCloudRepo(preparedProject.source.url)
+        : preparedProject.label
+      : undefined;
     return {
       ...record,
+      ...(record.preparation && preparedProject
+        ? {
+            preparation: {
+              ...record.preparation,
+              project: {
+                ...(projectLabel ? { label: projectLabel } : {}),
+                baseCommit: preparedProject.baseCommit,
+              },
+            },
+          }
+        : {}),
       ...((record.state === "failed" || record.state === "orphaned") && record.lastError
         ? { error: boundedError(record.lastError) }
         : {}),
@@ -179,7 +199,18 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       );
     }
     const provider = providerFor(record.providerId);
-    return await identityResolverFor(record, provider, record.leaseId)(record.sshEndpoint.keyRef);
+    return await identityResolverFor(
+      record,
+      provider,
+      record.leaseId,
+    )(record.sshEndpoint.keyRef, {
+      // Direct lookup has no tunnel; its service and exact lease own the invocation.
+      assertCurrent: () => {
+        if (options.isStopping()) {
+          throw serviceError("invalid_state", "Worker environment service is stopping");
+        }
+      },
+    });
   };
 
   const bindPreparedWorkspace = async (
@@ -267,11 +298,9 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (
         !inState(record, "ready", "idle", "attached") ||
         record.destroyRequestedAtMs !== null ||
-        !record.leaseId
+        !record.leaseId ||
+        !record.bootstrapReceipt
       ) {
-        throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
-      }
-      if (!record.bootstrapReceipt) {
         throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
       }
       if (record.sharedHost === null) {

@@ -26,6 +26,8 @@ import {
 } from "./plugin-inspect.test-support.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
+// Extracted and sourced snippets do not execute the production Darwin Bash fallback.
+const testBashExecPath = process.platform === "darwin" ? "/bin/bash" : "bash";
 
 const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 
@@ -89,7 +91,7 @@ function selectFrozenUpgradeOracle(
     source.indexOf("\nIMAGE_NAME="),
   );
   const result = spawnSync(
-    "bash",
+    testBashExecPath,
     [
       "-euo",
       "pipefail",
@@ -287,6 +289,7 @@ describe("upgrade recovery result assertions", () => {
       after: { version: "2026.8.1" },
       steps: [
         { name: "global update", exitCode: 0 },
+        { name: "global install swap", exitCode: 0 },
         { name: "openclaw doctor", exitCode: 0 },
       ],
     };
@@ -943,7 +946,7 @@ function writeSharedRuntimeCaches(stateDir: string, versioned = false): void {
   if (versioned) {
     roots.push(
       ...["discord", "feishu", "telegram", "whatsapp"].map(
-        (plugin) => `openclaw-2026.4.24-${plugin}`,
+        (plugin) => `openclaw-2026.6.1-${plugin}`,
       ),
     );
   }
@@ -978,7 +981,7 @@ function runSessionStateAssertion(
           OPENCLAW_STATE_DIR: stateDir,
           OPENCLAW_TEST_WORKSPACE_DIR: workspace,
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: options.scenario ?? "base",
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: "2026.4.24",
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: "2026.6.1",
         },
         stdio: "pipe",
       });
@@ -1004,7 +1007,7 @@ function seedSessionSourceFixture(stateDir: string, scenario = "base", missingPa
   writeJson(env.OPENCLAW_CONFIG_PATH, { plugins: { allow: [], entries: {} } });
   // Use the production shell seed boundary before the same assertions seed used by artifact-only.
   env.OPENCLAW_UPGRADE_SURVIVOR_MISSING_LOAD_PATH_SEEDED = execFileSync(
-    "bash",
+    testBashExecPath,
     [
       "-euc",
       `source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
@@ -2349,7 +2352,7 @@ process.stdout.write(sessionDir + "\\n");
               const root =
                 scenario === "base"
                   ? join("discord", ".openclaw-runtime-deps-copy-stale")
-                  : "openclaw-2026.4.24-feishu";
+                  : "openclaw-2026.6.1-feishu";
               const sentinel = join(
                 stateDir,
                 "plugin-runtime-deps",
