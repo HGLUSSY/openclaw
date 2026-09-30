@@ -14,12 +14,13 @@ import type { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { isGatewayDraining } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   canIsolateAgentDatabase,
   listAgentDatabaseAdmissionRefusals,
 } from "../state/agent-database-admission.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
-import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
+import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
@@ -37,7 +38,9 @@ import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.j
 import { createGatewayTransportBridge } from "./server-transport-bridge.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
+import { getHealthVersion, incrementPresenceVersion } from "./server/health-state.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
+import { createPresencePublisher } from "./server/presence-events.js";
 import { createReadinessChecker, createStartupChecker } from "./server/readiness.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -132,6 +135,7 @@ export async function prepareGatewayKernelState(params: {
     ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
         const workerModule = await loadWorkerEnvironmentStartupModule();
         return await workerModule.createGatewayWorkerEnvironmentRuntime({
+          scheduler,
           getPluginRegistry: () => pluginRuntime.registry,
           getPortalRuntime: () => pluginGatewayContext.current,
           resolveGatewayContext: resolvePluginGatewayContext,
@@ -147,6 +151,7 @@ export async function prepareGatewayKernelState(params: {
     workerLiveEvents,
     nodeWorkerGatewayNamespace,
     nodeWorkerBundleRetention,
+    runtimeInstall,
     bindDeviceNodeControl,
     bindWorkerNodeDesktopControl,
     bindNodeWorkspaceBindingResolver,
@@ -181,13 +186,14 @@ export async function prepareGatewayKernelState(params: {
           warn: (message) => log.warn(message),
         })
       : undefined;
-  const workerPlacementRuntime =
+  const workerPlacement =
     workerEnvironmentService &&
     workerEnvironmentStartup &&
     nodeWorkerGatewayNamespace &&
     workerPlacementModule
       ? await startupTrace.measure("worker-environments.placement-runtime", async () =>
           workerPlacementModule.createGatewayWorkerPlacementRuntime({
+            scheduler,
             placements: workerEnvironmentStartup.placementStore,
             getCommittedRuntimeConfig,
             environments: workerEnvironmentService,
@@ -232,6 +238,9 @@ export async function prepareGatewayKernelState(params: {
           }),
         )
       : undefined;
+  const workerPlacementRuntime = workerPlacement
+    ? { ...workerPlacement, runtimeInstall }
+    : undefined;
   if (workerPlacementRuntime && workerEnvironmentService) {
     const { createDevicePlacementDemandReader } =
       await import("./worker-environments/device-placement-demand.js");
@@ -354,13 +363,19 @@ export async function prepareGatewayKernelState(params: {
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
 
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
-  const authRateLimiter = createGatewayAuthRateLimiter(rateLimitConfig);
-  // Browser-origin attempts are throttled even when local CLI clients are exempt.
-  const browserAuthRateLimiter = createGatewayAuthRateLimiter({
-    ...rateLimitConfig,
-    exemptLoopback: false,
+  const authRateLimiter = createGatewayAuthRateLimiter(rateLimitConfig, {
+    scheduler,
+    id: "auth/main",
   });
-  const nodeReapprovalCoordinator = createNodeReapprovalCoordinator(rateLimitConfig);
+  // Browser-origin attempts are throttled even when local CLI clients are exempt.
+  const browserAuthRateLimiter = createGatewayAuthRateLimiter(
+    {
+      ...rateLimitConfig,
+      exemptLoopback: false,
+    },
+    { scheduler, id: "auth/browser" },
+  );
+  const nodeReapprovalCoordinator = createNodeReapprovalCoordinator(rateLimitConfig, { scheduler });
 
   const controlUiRootLifecycle = await startupTrace.measure("control-ui.root", () =>
     createGatewayControlUiRootLifecycle({
@@ -392,17 +407,14 @@ export async function prepareGatewayKernelState(params: {
     loadGatewayTlsServerRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
   );
   const serverStartedAt = Date.now();
-  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor();
+  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor({ scheduler });
   const startupState = {
     sidecarsReady: minimalTestGateway,
     pendingReason: "startup-sidecars",
     dispatchReady: false,
   };
   const lifecycle = { closePreludeStarted: false };
-  let releaseStartupAccountStarts = () => {};
-  const startupAccountStartsReady = new Promise<void>((resolve) => {
-    releaseStartupAccountStarts = resolve;
-  });
+  const startupAccountStarts = createDeferredCore();
   const gatewayInstanceRuntimeRef: { current: GatewayInstanceRuntime | undefined } = {
     current: undefined,
   };
@@ -414,13 +426,14 @@ export async function prepareGatewayKernelState(params: {
     () => import("./server-channels.js"),
   );
   const channelManager = createChannelManager({
+    scheduler,
     getRuntimeConfig,
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
     getPluginRegistry: () => pluginRuntime.registry,
     startupTrace,
-    deferStartupAccountStartsUntil: startupAccountStartsReady,
+    deferStartupAccountStartsUntil: startupAccountStarts.promise,
     getNativeApprovalRuntime: () => gatewayInstanceRuntimeRef.current?.nativeApprovals,
     ambientAutostartSuppressedChannelIds,
     ...(opts.tryRecoverChannelAutostartSuppression
@@ -463,13 +476,25 @@ export async function prepareGatewayKernelState(params: {
   log.info("starting HTTP server...");
   const connectionState = await startupTrace.measure("runtime.state", () =>
     createGatewayConnectionState({
+      scheduler,
       bootId,
       cfg: cfgAtStart,
       getRuntimeConfig,
     }),
   );
   const transportBridge = createGatewayTransportBridge();
+  const presencePublisher = createPresencePublisher({
+    scheduler,
+    broadcast: connectionState.broadcast,
+    incrementPresenceVersion,
+    getHealthVersion,
+    prepare: () => {
+      const projection = connectionState.getSessionRowProjection();
+      return projection?.needsMembershipPreparation() ? projection.prepareMembership() : undefined;
+    },
+  });
   const createHttpTransportOptions = () => ({
+    scheduler: params.scheduler,
     cfg: cfgAtStart,
     getRuntimeConfig,
     bindHost,
@@ -511,26 +536,6 @@ export async function prepareGatewayKernelState(params: {
     clients: connectionState.clients,
     tailscaleMode,
   });
-  const {
-    clients,
-    mentionInbox,
-    broadcast,
-    broadcastToConnIds,
-    broadcastPluginEvent,
-    getBufferedAmount,
-    agentRunSeq,
-    dedupe,
-    chatRunState,
-    addChatRun,
-    removeChatRun,
-    chatAbortControllers,
-    chatQueuedTurns,
-    toolEventRecipients,
-    sessionEventSubscribers,
-    sessionMessageSubscribers,
-    isConnectionActive,
-  } = connectionState;
-
   return {
     ...bootstrap,
     scheduler,
@@ -584,7 +589,7 @@ export async function prepareGatewayKernelState(params: {
     readinessEventLoopHealth,
     startupState,
     lifecycle,
-    releaseStartupAccountStarts,
+    releaseStartupAccountStarts: startupAccountStarts.resolve,
     gatewayInstanceRuntimeRef,
     channelManager,
     sidecarStartup,
@@ -593,25 +598,8 @@ export async function prepareGatewayKernelState(params: {
     watchNodeRequestHandler,
     createHttpTransportOptions,
     transportBridge,
-    connectionWork: connectionState.connectionWork,
-    getSessionRowProjection: connectionState.getSessionRowProjection,
-    attachSessionRowProjection: connectionState.attachSessionRowProjection,
-    clients,
-    mentionInbox,
-    broadcast,
-    broadcastToConnIds,
-    broadcastPluginEvent,
-    getBufferedAmount,
-    agentRunSeq,
-    dedupe,
-    chatRunState,
-    addChatRun,
-    removeChatRun,
-    chatAbortControllers,
-    chatQueuedTurns,
-    toolEventRecipients,
-    sessionEventSubscribers,
-    sessionMessageSubscribers,
-    isConnectionActive,
+    ...connectionState,
+    publishPresence: presencePublisher.publish,
+    stopPresencePublications: presencePublisher.stop,
   };
 }

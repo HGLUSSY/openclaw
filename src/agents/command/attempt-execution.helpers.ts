@@ -1,7 +1,3 @@
-/**
- * Helper functions for agent attempt execution, Claude CLI transcript probing,
- * fallback prompts, and ACP visible-text accumulation.
- */
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
@@ -32,6 +28,7 @@ import {
 import { buildAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
+import { isClaudeToolResultBlockType, isClaudeToolUseBlockType } from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
@@ -145,7 +142,6 @@ export async function sessionTranscriptHasContent(
   );
 }
 
-/** Resolves the expected Claude CLI transcript JSONL path for a session. */
 function claudeCliSessionTranscriptPath(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
@@ -171,7 +167,6 @@ function claudeCliSessionTranscriptPath(params: {
 const CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS = 250;
 const CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES = 1024 * 1024;
 
-/** Checks whether Claude CLI has flushed assistant content for a session. */
 export async function claudeCliSessionTranscriptHasContent(
   params: Parameters<typeof claudeCliSessionTranscriptPath>[0],
 ): Promise<boolean> {
@@ -204,16 +199,6 @@ function toToolContentBlocks(content: unknown): ToolContentBlock[] | undefined {
   return content.filter((item): item is ToolContentBlock =>
     Boolean(item && typeof item === "object"),
   );
-}
-
-function isClaudeTranscriptToolUseBlock(block: ToolContentBlock): boolean {
-  const type = block.type;
-  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
-}
-
-function isClaudeTranscriptToolResultBlock(block: ToolContentBlock): boolean {
-  const type = block.type;
-  return type === "tool_result" || (typeof type === "string" && type.endsWith("_tool_result"));
 }
 
 async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<boolean> {
@@ -253,9 +238,9 @@ async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<bo
       }
       for (const block of toToolContentBlocks(message?.content) ?? []) {
         const target =
-          role === "assistant" && isClaudeTranscriptToolUseBlock(block)
+          role === "assistant" && isClaudeToolUseBlockType(block.type)
             ? lastAssistantToolUseIds
-            : isClaudeTranscriptToolResultBlock(block)
+            : isClaudeToolResultBlockType(block.type)
               ? answeredToolResultIds
               : undefined;
         if (target) {
@@ -275,7 +260,6 @@ async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<bo
   });
 }
 
-/** Checks whether the latest Claude CLI transcript tail has unanswered tool use. */
 export async function claudeCliSessionTranscriptHasOrphanedToolUse(
   params: Parameters<typeof claudeCliSessionTranscriptPath>[0],
 ): Promise<boolean> {
@@ -286,7 +270,6 @@ export async function claudeCliSessionTranscriptHasOrphanedToolUse(
   return await jsonlFileHasOrphanedTrailingToolUse(expectedPath);
 }
 
-/** Builds the retry prompt sent to fallback models after a failed attempt. */
 export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;
@@ -529,12 +512,6 @@ export function createAcpVisibleTextAccumulator() {
       });
     },
   };
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.attemptExecutionHelpersTestApi")
-  ] = { claudeCliSessionTranscriptPath, formatClaudeCliFallbackPrelude };
 }
 
 export function rebaseExecApprovalContinuationPromptRange(params: {

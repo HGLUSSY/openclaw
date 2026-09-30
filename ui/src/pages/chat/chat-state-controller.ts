@@ -4,10 +4,7 @@ import type { ChatPendingInputsPage } from "../../../../packages/gateway-protoco
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import {
-  parseStoredChatOutboxScope,
-  type StoredChatOutboxScope,
-} from "../../lib/chat/outbox-store.ts";
+import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
@@ -18,6 +15,7 @@ import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
+import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
@@ -28,7 +26,6 @@ import {
   isChatComposerOwnerCurrent,
   isIncognitoComposerScope,
 } from "./composer-persistence-state.ts";
-import type { ChatComposerPersistResult } from "./composer-persistence-state.ts";
 import { ChatComposerPersistence, markChatComposerEdit } from "./composer-persistence.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
@@ -40,7 +37,7 @@ type ChatRenderLifecycleScope = {
 
 export class ChatStateController<TState extends ChatPageHost> implements ReactiveController {
   private attachmentReadsValue: ChatAttachmentReadLifecycle;
-  private readonly composerPersistence: ChatComposerPersistence;
+  readonly composerPersistence: ChatComposerPersistence;
   private stateValue: TState | undefined;
   private privateDraftReview: { controller: AbortController; isCurrent: () => boolean } | undefined;
   private previousChatLoading = false;
@@ -98,9 +95,10 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     const reads = this.attachmentReads;
     const readSignal = reads.readSignal;
     return {
+      uploadConfig: state.uploadConfig,
       attachmentReads: reads,
       attachments: state.chatAttachments,
-      attachmentLimits: state.hello?.policy?.attachments,
+      attachmentLimits: resolveChatAttachmentLimits(state.hello?.policy),
       getAttachments: () => state.chatAttachments,
       pendingAttachmentReads: reads.pendingReads,
       getPendingAttachmentReads: () => reads.pendingReads,
@@ -583,34 +581,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       return;
     }
     scheduleCommittedChatScroll(state, force, state.chatHasAutoScrolled, { contentChanged });
-  }
-
-  restoreComposer(options: { preserveCurrent?: boolean } = {}) {
-    this.composerPersistence.restore(options);
-  }
-
-  startComposerPersistence() {
-    this.composerPersistence.start();
-  }
-
-  pauseComposerPersistence() {
-    this.composerPersistence.stop();
-  }
-
-  persistComposerForEviction(): ChatComposerPersistResult {
-    return this.composerPersistence.persistForRouteSwitchResult();
-  }
-
-  composerScopeForEviction(): StoredChatOutboxScope | null {
-    return this.composerPersistence.scopeForRouteSwitch();
-  }
-
-  get durableComposerScope() {
-    return this.composerPersistence.durableScope;
-  }
-
-  get composerDraftRevision(): number {
-    return this.composerPersistence.draftRevision;
   }
 
   private stopChatEffects() {

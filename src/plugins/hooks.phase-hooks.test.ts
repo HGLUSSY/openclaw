@@ -1,4 +1,3 @@
-/** Tests phase-scoped plugin hooks and hook registration ordering. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
@@ -35,19 +34,6 @@ describe("phase hooks merger", () => {
       return await runner.runBeforeModelResolve({ prompt: "test" }, {});
     }
     return await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
-  }
-
-  async function expectPhaseHookMerge(params: {
-    hookName: "before_model_resolve" | "before_prompt_build";
-    hooks: ReadonlyArray<{
-      pluginId: string;
-      result: PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult;
-      priority?: number;
-    }>;
-    expected: PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult;
-  }) {
-    const result = await runPhaseHook(params);
-    expect(result).toStrictEqual(params.expected);
   }
 
   it.each([
@@ -93,9 +79,6 @@ describe("phase hooks merger", () => {
       ],
       expected: {
         prependContext: "context A\n\ncontext B",
-        appendContext: undefined,
-        prependSystemContext: undefined,
-        appendSystemContext: undefined,
         systemPrompt: "system A",
       },
     },
@@ -121,9 +104,6 @@ describe("phase hooks merger", () => {
         },
       ],
       expected: {
-        systemPrompt: undefined,
-        prependContext: undefined,
-        appendContext: undefined,
         prependSystemContext: "prepend A\n\nprepend B",
         appendSystemContext: "append A\n\nappend B",
       },
@@ -144,11 +124,6 @@ describe("phase hooks merger", () => {
         },
       ],
       expected: {
-        systemPrompt: undefined,
-        prependContext: undefined,
-        appendContext: undefined,
-        prependSystemContext: undefined,
-        appendSystemContext: undefined,
         toolsAllow: ["read", "web_search"],
       },
     },
@@ -168,11 +143,6 @@ describe("phase hooks merger", () => {
         },
       ],
       expected: {
-        systemPrompt: undefined,
-        prependContext: undefined,
-        appendContext: undefined,
-        prependSystemContext: undefined,
-        appendSystemContext: undefined,
         toolsAllow: [],
       },
     },
@@ -186,11 +156,6 @@ describe("phase hooks merger", () => {
         },
       ],
       expected: {
-        systemPrompt: undefined,
-        prependContext: undefined,
-        appendContext: undefined,
-        prependSystemContext: undefined,
-        appendSystemContext: undefined,
         toolsAllow: [],
       },
     },
@@ -204,16 +169,23 @@ describe("phase hooks merger", () => {
         },
       ],
       expected: {
-        systemPrompt: undefined,
-        prependContext: undefined,
-        appendContext: undefined,
-        prependSystemContext: undefined,
-        appendSystemContext: undefined,
         toolsAllow: [],
       },
     },
   ] as const)("$name", async ({ hookName, hooks, expected }) => {
-    await expectPhaseHookMerge({ hookName, hooks, expected });
+    const result = await runPhaseHook({ hookName, hooks });
+    expect(result).toStrictEqual(
+      hookName === "before_model_resolve"
+        ? expected
+        : {
+            systemPrompt: undefined,
+            prependContext: undefined,
+            appendContext: undefined,
+            prependSystemContext: undefined,
+            appendSystemContext: undefined,
+            ...expected,
+          },
+    );
   });
 
   it("accepts a frozen toolsAllow returned by a plugin", async () => {

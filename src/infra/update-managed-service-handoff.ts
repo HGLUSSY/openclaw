@@ -13,7 +13,6 @@ import { resolveUpdatedInstallCommandEnv } from "../cli/update-cli/update-comman
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { resolveSystemdServiceName } from "../daemon/systemd-service-files.js";
-import { buildCliRespawnPlan } from "../entry.respawn.js";
 import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import {
   GatewayDrainingError,
@@ -66,6 +65,10 @@ import {
   type ManagedHandoffLease,
 } from "./update-managed-service-handoff-lease.js";
 import { MANAGED_HANDOFF_NATIVE_SCOPE_SOURCE } from "./update-managed-service-handoff-native-scope-source.js";
+import {
+  prepareManagedHandoffCliRuntime,
+  resolveManagedHandoffNodeExecutable,
+} from "./update-managed-service-handoff-node.js";
 import { MANAGED_HANDOFF_PARENT_SOURCE } from "./update-managed-service-handoff-parent-source.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "./update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-runtime.js";
@@ -73,6 +76,8 @@ import {
   resolveGatewayServiceRecovery,
   admitSystemdUpdate,
   joinSystemServiceUpdateHandoffs,
+  observeManagedServiceUpdateHandoffClose,
+  SYSTEM_SERVICE_UPDATE_SETTLED_MARKER,
 } from "./update-managed-service-handoff-service.js";
 import type {
   ActiveManagedServiceUpdateHandoff,
@@ -576,6 +581,8 @@ function isLaunchdNotLoaded(result) {
   return /no such process|could not find service|not found/i.test(result.stderr || result.stdout);
 }
 
+const parseLaunchdPid = (stdout) => Number(/^\s*pid\s*=\s*([1-9]\d*)\s*$/im.exec(stdout)?.[1]);
+
 let parkedServiceGeneration = null;
 let parkedServiceInvocation = null;
 let parkedServiceFragment = null;
@@ -667,8 +674,7 @@ async function parkGatewayService() {
   if (recovery.kind !== "launchd") throw new Error("unsupported managed update supervisor");
   const target = "gui/" + recovery.uid + "/" + recovery.label;
   const inspection = await runServiceCommand("launchctl", ["print", target], undefined, params.parentExitDeadlineAt);
-  const parentMatch = /^\s*pid\s*=\s*([1-9]\d*)\s*$/im.exec(inspection.stdout);
-  if (inspection.code !== 0 || Number(parentMatch?.[1]) !== params.parentPid) {
+  if (inspection.code !== 0 || parseLaunchdPid(inspection.stdout) !== params.parentPid) {
     throw new Error("launchd service does not match the exact active gateway parent");
   }
   assertGatewayParkOwner();
@@ -762,7 +768,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
     const run = (args) => runOwned("launchctl", args, undefined, deadline);
     const before = await run(["print", target]);
     if (before.code === 0) {
-      const pid = Number(/^\s*pid\s*=\s*([1-9]\d*)\s*$/im.exec(before.stdout)?.[1]);
+      const pid = parseLaunchdPid(before.stdout);
       if (pid && pid !== params.parentPid) {
         appendLog("recovery refused: launchd service has another process generation");
         record(false);
@@ -778,7 +784,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
       const current = ownsRecovery()
         ? await runOwned("launchctl", ["print", target]) : null;
       const pid = current?.code === 0
-        ? Number(/^\s*pid\s*=\s*([1-9]\d*)\s*$/im.exec(current.stdout)?.[1]) : 0;
+        ? parseLaunchdPid(current.stdout) : 0;
       serviceRunning = current?.code === 0 ? Boolean(pid && isPidAlive(pid)) : undefined;
       servicePid = serviceRunning ? pid : undefined;
       restored = !restarted.signal && restarted.code === 0 && Boolean(pid && pid !== params.parentPid && serviceRunning);
@@ -788,7 +794,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
     for (let inspection = enabled; enabled.code === 0 && Date.now() < deadline;) {
       inspection = await run(["print", target]);
       if (inspection.code === 0) {
-        const pid = Number(/^\s*pid\s*=\s*([1-9]\d*)\s*$/im.exec(inspection.stdout)?.[1]);
+        const pid = parseLaunchdPid(inspection.stdout);
         if (pid !== params.parentPid && isPidAlive(pid)) {
           restored = true;
           servicePid = pid;
@@ -1385,6 +1391,7 @@ let automaticRequested = false;
     cleanupSensitiveFiles();
     stopTriageScope();
     appendLog("managed update helper completed code=" + (process.exitCode || 0));
+    if (params.operatorRestartWarning) fs.writeSync(1, ${JSON.stringify(SYSTEM_SERVICE_UPDATE_SETTLED_MARKER)});
     if (foregroundClosed && parentIdentityCurrent())
       fs.writeSync(1, "foreground-settled:" + (foregroundRespawn ? "respawn" : "stopped") + "\n");
     process.stdin.destroy();
@@ -1420,6 +1427,8 @@ async function spawnManagedServiceUpdateHandoff(
     }
     await assertForegroundUpdateOrigin(params.foregroundOrigin, false, serviceEnv);
   }
+  const handoffNodeExecutable =
+    params.execPath ?? (await resolveManagedHandoffNodeExecutable(serviceEnv, params.supervisor));
   const updateLeaseDatabasePath =
     owner.leaseDatabaseIdentity?.databasePath ?? resolveManagedUpdateLeaseDatabasePath();
   // The helper and its parent retain one database identity through settlement.
@@ -1480,7 +1489,7 @@ async function spawnManagedServiceUpdateHandoff(
     ? [params.action.nodeRunner, params.action.entrypoint, "triage"]
     : resolveUpdateCliArgv({
         ...commandOptions,
-        execPath: params.execPath ?? process.execPath,
+        execPath: handoffNodeExecutable,
         argv1: params.argv1 ?? process.argv[1],
       });
   if (owner.operatorRestartWarning) {
@@ -1500,7 +1509,7 @@ async function spawnManagedServiceUpdateHandoff(
       ...(params.foregroundOrigin ? { foregroundOrigin: params.foregroundOrigin } : {}),
     },
   };
-  let spawnCommand = params.execPath ?? process.execPath;
+  let spawnCommand = handoffNodeExecutable;
   const spawnArgs = [scriptPath, paramsPath];
   let scopeUnit: string | undefined;
   let systemdRunPath: string | undefined;
@@ -1553,24 +1562,11 @@ async function spawnManagedServiceUpdateHandoff(
     processEnv: childEnv,
     invocationCwd: process.cwd(),
   });
-  const nodeCommand =
-    commandArgv[0] === process.execPath ||
-    /^(?:node|bun)(?:\.exe)?$/iu.test(path.basename(commandArgv[0] ?? ""));
-  const startup = nodeCommand
-    ? buildCliRespawnPlan({
-        argv: commandArgv,
-        env: preparedEnv,
-        execArgv: [],
-        execPath: commandArgv[0],
-      })
-    : null;
-  const nodeExecArgv = nodeCommand
-    ? (startup?.argv.slice(0, startup.argv.length - commandArgv.length + 1) ?? [])
-    : undefined;
-  if (startup) {
-    commandArgv[0] = startup.command;
-  }
-  const readyEnv = startup?.env ?? preparedEnv;
+  const { nodeExecArgv, readyEnv } = prepareManagedHandoffCliRuntime(
+    commandArgv,
+    preparedEnv,
+    handoffNodeExecutable,
+  );
   const env = params.devTarget ? applyDevUpdateTargetEnv(readyEnv, params.devTarget) : readyEnv;
 
   const helperParams = {
@@ -1593,12 +1589,12 @@ async function spawnManagedServiceUpdateHandoff(
     invocationCwd: params.invocationCwd,
     commandArgv,
     recoveryCommandArgv: resolveManagedServiceCliArgv(
-      { execPath: params.execPath ?? process.execPath, argv1: params.argv1 ?? process.argv[1] },
+      { execPath: handoffNodeExecutable, argv1: params.argv1 ?? process.argv[1] },
       ["gateway", "restart", "--preserve-definition", "--json"],
     ),
     recoveryTimeoutMs: owner.recoveryTimeoutMs,
     triageCommandArgv: resolveManagedServiceCliArgv(
-      { execPath: params.execPath ?? process.execPath, argv1: params.argv1 ?? process.argv[1] },
+      { execPath: handoffNodeExecutable, argv1: params.argv1 ?? process.argv[1] },
       ["triage", "--json", "--non-interactive"],
     ),
     triageContextPath,
@@ -1665,12 +1661,7 @@ async function spawnManagedServiceUpdateHandoff(
       stdio: ["pipe", "pipe", "ignore"],
     });
     owner.launcher = child;
-    owner.closed = new Promise((resolve) => {
-      child.once("close", () => {
-        owner.settled = child.exitCode !== null && child.signalCode === null;
-        resolve();
-      });
-    });
+    owner.closed = observeManagedServiceUpdateHandoffClose(owner, child);
     child.stdin.on("error", () => child.stdin.destroy()).once("close", () => child.stdin.destroy());
     // Failed spawn handles are not processes and must never be signalled.
     if (!child.pid) {
@@ -2025,6 +2016,8 @@ export async function isCurrentManagedServiceUpdateHandoffProcess(params: {
   root: string;
   runId: string | undefined;
   env?: NodeJS.ProcessEnv;
+  /** Retain the executor's admitted physical store through the sentinel await. */
+  store?: ReturnType<typeof createManagedHandoffLeaseStore>;
 }): Promise<boolean> {
   const env = params.env ?? process.env;
   if (env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1" || !params.runId) {
@@ -2040,8 +2033,8 @@ export async function isCurrentManagedServiceUpdateHandoffProcess(params: {
   ) {
     return false;
   }
-  const lease = readManagedServiceUpdateHandoffLease(root);
-  const store = createManagedHandoffLeaseStore();
+  const lease = readManagedServiceUpdateHandoffLease(root, undefined, params.store);
+  const store = params.store ?? createManagedHandoffLeaseStore();
   return (
     lease?.owner === meta.handoffId &&
     lease.executor.pid === process.pid &&
@@ -2297,15 +2290,13 @@ export async function completeForegroundUpdateHandoffAfterClose(
 function readManagedServiceUpdateHandoffLease(
   root: string,
   stale?: ActiveManagedServiceUpdateHandoff,
+  selectedStore?: ReturnType<typeof createManagedHandoffLeaseStore>,
 ): ManagedHandoffLease | null | undefined {
   const owner = stale ?? activeManagedServiceUpdateHandoffs.get(root);
-  const store = owner ? owner.leaseStore : createManagedHandoffLeaseStore();
-  if (!store) {
-    return undefined;
-  }
-  const result = store.read(root);
-  if (result.kind !== "current") {
-    return result.kind === "absent" ? null : undefined;
+  const store = selectedStore ?? (owner ? owner.leaseStore : createManagedHandoffLeaseStore());
+  const result = store?.read(root);
+  if (!store || result?.kind !== "current") {
+    return result?.kind === "absent" ? null : undefined;
   }
   const lease = result.lease;
   if (

@@ -602,6 +602,8 @@ export async function publish(ctx: ReleaseContext): Promise<void> {
       }
     }
     inputs.set("wait_for_clawhub", "false");
+    // flip-github activates the release itself; keep Docker off the activation gate.
+    inputs.delete("finalize_release_before_docker");
     const dispatched = await dispatchReleaseWorkflow(ctx, {
       phase: "publish",
       workflow: "openclaw-release-publish.yml",
@@ -638,7 +640,7 @@ export async function publish(ctx: ReleaseContext): Promise<void> {
     next,
     probe: async () => {
       await approveReleaseGates(ctx, state.repo, id, "npm-release");
-      if (!state.capabilities?.parentApprovalReceipt) {
+      if (!state.capabilities?.childNpmPublishEnvironment) {
         await reportWaitingChildren(ctx, reportedChildren);
       }
       const npm = await ctx.run(

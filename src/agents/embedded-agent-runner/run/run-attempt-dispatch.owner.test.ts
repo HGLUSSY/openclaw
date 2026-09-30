@@ -384,8 +384,6 @@ it.each(dispatchCases)(
             maybeAnnounceFastModeAutoOff: vi.fn(),
             notifyExecutionPhase: vi.fn(),
             notifyRunProgress: vi.fn(),
-            notifyToolResult: vi.fn(),
-            notifyAgentEvent: vi.fn(),
           },
         },
         preparedRuntime: {
@@ -502,6 +500,7 @@ it.each(dispatchCases)(
               sessionPermissionRoot: projection,
               sessionPermissionPolicy: { root: projection, mode: "guarded" },
               sandbox: projectedSandbox,
+              sandboxReport: { mode: "all", sandboxed: true },
               sandboxSessionKey: "global",
               sessionAgentId: agentId,
             })

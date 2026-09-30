@@ -81,7 +81,7 @@ export function createAgentAdmissionController(params: {
       if (commitOutcome) {
         postAdmissionAbort = latest;
       }
-      return;
+      return undefined;
     }
     if (params.dedupeLifecycle.isReserved()) {
       if (!latest) {
@@ -89,40 +89,40 @@ export function createAgentAdmissionController(params: {
           postAdmissionTimeout = buildAbortedAgentPayload(params.runId, "timeout");
           setAbortedAgentDedupeEntries({
             dedupe: params.context.dedupe,
-            keys: params.agentDedupeKeys,
+            keys: params.dedupeLifecycle.ownedReservationKeys(),
             agentId: admissionAgentId(),
             sessionKey: resolvedSessionKey,
             runId: params.runId,
             stopReason: "timeout",
           });
         }
-        return;
+        return undefined;
       }
       if (!latest.ok || !isAcceptedAgentDedupePayload(latest.payload)) {
         if (commitOutcome) {
           postAdmissionAbort = latest;
         }
-        return;
+        return undefined;
       }
-      if (latest.payload.reservationId !== params.dedupeLifecycle.reservationId) {
+      if (!params.dedupeLifecycle.ownsReservation()) {
         if (commitOutcome) {
           postAdmissionSuperseded = true;
         }
-        return;
+        return undefined;
       }
       if (!isFutureDateTimestampMs(latest.payload.expiresAtMs, { nowMs: Date.now() })) {
         if (commitOutcome) {
           postAdmissionTimeout = buildAbortedAgentPayload(params.runId, "timeout");
           setAbortedAgentDedupeEntries({
             dedupe: params.context.dedupe,
-            keys: params.agentDedupeKeys,
+            keys: params.dedupeLifecycle.ownedReservationKeys(),
             agentId: admissionAgentId(),
             sessionKey: resolvedSessionKey,
             runId: params.runId,
             stopReason: "timeout",
           });
         }
-        return;
+        return undefined;
       }
     }
     if (params.lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
@@ -132,10 +132,10 @@ export function createAgentAdmissionController(params: {
           agentId: admissionAgentId(),
         });
       }
-      return;
+      return undefined;
     }
     if (!resolvedSessionKey) {
-      return;
+      return undefined;
     }
     const admissionAgent = admissionAgentId();
     let latestEntry = loadSessionEntry(resolvedSessionKey, {
@@ -169,6 +169,7 @@ export function createAgentAdmissionController(params: {
     ) {
       params.setAdmittedSessionId(latestEntry.sessionId);
     }
+    return latestEntry;
   };
 
   const interrupt = (reason?: Error) => {
@@ -193,18 +194,11 @@ export function createAgentAdmissionController(params: {
       );
       return ownsRun ? { runId: params.runId } : undefined;
     }
-    const reservedEntry = readGatewayDedupeEntry({
-      dedupe: params.context.dedupe,
-      keys: params.agentDedupeKeys,
-    });
-    if (
-      reservedEntry?.ok &&
-      isAcceptedAgentDedupePayload(reservedEntry.payload) &&
-      reservedEntry.payload.reservationId === params.dedupeLifecycle.reservationId
-    ) {
+    const keys = params.dedupeLifecycle.ownedReservationKeys();
+    if (keys.length) {
       setAbortedAgentDedupeEntries({
         dedupe: params.context.dedupe,
-        keys: params.agentDedupeKeys,
+        keys,
         agentId: admissionAgentId(),
         sessionKey: params.getResolvedSessionKey(),
         runId: params.runId,
@@ -229,8 +223,12 @@ export function createAgentAdmissionController(params: {
         scope,
         identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
         ...(params.admissionOwner ? { owner: params.admissionOwner } : {}),
-        assertAllowed: () => assertAllowed(false),
-        revalidateAllowed: assertAllowed,
+        assertAllowed: () => {
+          assertAllowed(false);
+        },
+        revalidateAllowed: () => {
+          assertAllowed();
+        },
         onInterrupt: interrupt,
       }));
   };

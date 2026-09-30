@@ -20,15 +20,15 @@ import {
   disconnectStaleSharedGatewayAuthClients,
   enforceSharedGatewaySessionGenerationForConfigWrite,
 } from "./server-shared-auth-generation.js";
-import { recordClientPresenceActivity, refreshClientPresence } from "./server/client-presence.js";
-import type { GatewayClientRegistry } from "./server/client-registry.js";
 import {
-  getHealthCache,
-  getHealthVersion,
-  incrementPresenceVersion,
-} from "./server/health-state.js";
-import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+  recordClientPresenceActivity,
+  refreshClientPresence,
+  snapshotClientPresence,
+} from "./server/client-presence.js";
+import type { GatewayClientRegistry } from "./server/client-registry.js";
+import { getHealthCache } from "./server/health-state.js";
 import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
+import { resolveSessionRequestTargets } from "./session-request-targets.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 
 type GatewayRequestContextClient = GatewayClient & {
@@ -62,6 +62,7 @@ type GatewayRequestContextRuntime = Pick<
   | "readPreparedGatewayModelCatalogBatch"
   | "getRuntimeSnapshot"
   | "broadcast"
+  | "publishPresence"
   | "broadcastToConnIds"
   | "nodeSendToSession"
   | "nodeSendToAllSubscribed"
@@ -99,7 +100,9 @@ type GatewayRequestContextRuntime = Pick<
 > &
   Pick<
     GatewayCoreRuntime,
+    | "scheduler"
     | "getSessionRowProjection"
+    | "forgetConnectionAncestors"
     | "refreshGatewayHealthSnapshotWithRuntime"
     | "hasTalkNodeConnected"
     | "sharedGatewaySessionGenerationState"
@@ -158,6 +161,7 @@ type GatewayRequestContextRuntime = Pick<
       | {
           diskSpace: GatewayRequestContext["workerPlacementDiskSpaceReader"];
           runnerAvailability: GatewayRequestContext["workerPlacementRunnerAvailabilityReader"];
+          runtimeInstall?: GatewayRequestContext["workerPlacementRuntimeInstallReader"];
           repositoryWorkspaceMutationService: GatewayRequestContext["workerRepositoryWorkspaceMutationService"];
         }
       | undefined;
@@ -238,13 +242,14 @@ export function createGatewayRequestContext(
   const workerPlacementDiskSpaceReader = runtime.workerPlacementRuntime?.diskSpace;
   const workerPlacementRunnerAvailabilityReader =
     runtime.workerPlacementRuntime?.runnerAvailability;
+  const workerPlacementRuntimeInstallReader = runtime.workerPlacementRuntime?.runtimeInstall;
   const workerRepositoryWorkspaceMutationService =
     runtime.workerPlacementRuntime?.repositoryWorkspaceMutationService;
   const {
     invalidateSessionsForDevice: invalidateDeviceTransports,
     disconnectSessionsForDevice: disconnectDeviceTransports,
   } = runtime.watchNodeHttpRuntime;
-  const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator();
+  const scopeUpgradeCoordinator = new ScopeUpgradeCoordinator(runtime.scheduler);
   const context: GatewayRequestContext = {
     trackExecution: (run) => connectionWork.track(run),
     deps: runtime.deps,
@@ -258,6 +263,8 @@ export function createGatewayRequestContext(
       return runtimeState.cronState.storePath;
     },
     getRuntimeConfig,
+    resolveSessionRequestTargets: (request) =>
+      resolveSessionRequestTargets({ ...request, context }),
     getCommittedRuntimeConfig: () =>
       runtimeState.configReloader.getCommittedRuntimeConfig?.() ?? getRuntimeConfig(),
     isConfigReloadSettled: () =>
@@ -318,9 +325,9 @@ export function createGatewayRequestContext(
     refreshHealthSnapshot: runtime.refreshGatewayHealthSnapshotWithRuntime,
     logHealth: params.logHealth,
     logGateway: params.log,
-    incrementPresenceVersion,
-    getHealthVersion,
     broadcast,
+    publishPresence: runtime.publishPresence,
+    getPresenceSnapshot: () => snapshotClientPresence(clients),
     broadcastToConnIds: runtime.broadcastToConnIds,
     nodeSendToSession: runtime.nodeSendToSession,
     nodeSendToAllSubscribed: runtime.nodeSendToAllSubscribed,
@@ -331,11 +338,7 @@ export function createGatewayRequestContext(
     isConnectionActive: runtime.isConnectionActive,
     recordClientActivity: (client) => {
       if (recordClientPresenceActivity(clients, client)) {
-        broadcastPresenceSnapshot({
-          broadcast,
-          incrementPresenceVersion,
-          getHealthVersion,
-        });
+        runtime.publishPresence();
       }
     },
     hasExecApprovalClients: (excludeConnId?: string) => {
@@ -441,11 +444,7 @@ export function createGatewayRequestContext(
         }
       }
       if (presenceChanged) {
-        broadcastPresenceSnapshot({
-          broadcast,
-          incrementPresenceVersion,
-          getHealthVersion,
-        });
+        runtime.publishPresence();
       }
     },
     invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
@@ -504,12 +503,13 @@ export function createGatewayRequestContext(
         state: sharedGatewaySessionGenerationState,
       });
     },
-    enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig) => {
+    enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig, previousConfig) => {
       enforceSharedGatewaySessionGenerationForConfigWrite({
         state: sharedGatewaySessionGenerationState,
         nextConfig,
         resolveRuntimeSnapshotGeneration: resolveSharedGatewaySessionGenerationForRuntimeSnapshot,
         clients,
+        transition: { previous: previousConfig, next: getRuntimeConfig() },
       });
       publishOperatorRoleConfigChange(context);
     },
@@ -527,6 +527,7 @@ export function createGatewayRequestContext(
     ...(workerSessionPlacementService ? { workerSessionPlacementService } : {}),
     ...(workerPlacementDiskSpaceReader ? { workerPlacementDiskSpaceReader } : {}),
     ...(workerPlacementRunnerAvailabilityReader ? { workerPlacementRunnerAvailabilityReader } : {}),
+    ...(workerPlacementRuntimeInstallReader ? { workerPlacementRuntimeInstallReader } : {}),
     ...(workerRepositoryWorkspaceMutationService
       ? { workerRepositoryWorkspaceMutationService }
       : {}),
@@ -546,6 +547,7 @@ export function createGatewayRequestContext(
     removeChatRun: runtime.removeChatRun,
     subscribeSessionEvents: sessionEventSubscribers.subscribe,
     unsubscribeSessionEvents: sessionEventSubscribers.unsubscribe,
+    forgetConnectionAncestors: runtime.forgetConnectionAncestors,
     subscribeSessionMessageEvents: runtime.subscribeSessionMessageEvents,
     unsubscribeSessionMessageEvents: runtime.unsubscribeSessionMessageEvents,
     unsubscribeAllSessionEvents: (connId) => {

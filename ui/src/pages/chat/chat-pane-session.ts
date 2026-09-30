@@ -85,6 +85,17 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     );
   }
 
+  protected sessionPullRequestChatProps(sessionId: string | undefined) {
+    return {
+      pullRequests: this.visibleSessionPullRequests,
+      pullRequestsGateway: this.context.gateway,
+      pullRequestsSessionId: sessionId,
+      pullRequestsBranch: this.sessionPullRequestsBranch,
+      pullRequestsStatus: this.sessionPullRequestsStatus,
+      onDismissPullRequest: this.dismissSessionPullRequest,
+    };
+  }
+
   private applyPullRequestPresentation(
     result?: ControlUiSessionPullRequestSnapshot,
     dismissed = this.dismissedSessionPullRequestIds,
@@ -571,12 +582,10 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       return false;
     } finally {
-      if (isCurrent()) {
-        if (!older) {
-          this.catalogLoading = false;
-          state.chatLoading = false;
-          state.requestUpdate();
-        }
+      if (isCurrent() && !older) {
+        this.catalogLoading = false;
+        state.chatLoading = false;
+        state.requestUpdate();
       }
     }
   }

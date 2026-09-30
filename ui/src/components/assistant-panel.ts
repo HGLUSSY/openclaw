@@ -93,22 +93,10 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
         () => this.context,
         (context, notify) => subscribePluginHelp(context, notify),
       )
-      .watch(
-        () => this.store,
-        (store, notify) => store.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agentSelection,
-        (selection, notify) => selection.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agents,
-        (agents, notify) => agents.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
-      );
+      .watchStore(() => this.store)
+      .watchStore(() => this.context?.agentSelection)
+      .watchStore(() => this.context?.agents)
+      .watchStore(() => this.context?.gateway);
   }
 
   override connectedCallback(): void {
@@ -423,7 +411,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
               .size=${16}
             ></openclaw-mascot>
             ${(["home", "custodian"] as const).map((destination) =>
-              (destination === "home" ? this.homeAvailable : this.custodianAvailable)
+              this.availableFor(destination)
                 ? html`<button
                     type="button"
                     class="assistant-panel-tab"

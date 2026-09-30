@@ -1,4 +1,3 @@
-// QA runner runtime helpers expose plugin QA scenarios through the CLI command surface.
 import type { Command } from "commander";
 import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-build.js";
 import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
@@ -276,24 +275,15 @@ export type LiveTransportQaSuiteCommandOptions = {
   }) => string[];
 };
 
-type LiveTransportQaCommanderOptions = {
-  channelDriver?: string;
-  concurrency?: number;
-  repoRoot?: string;
-  outputDir?: string;
-  providerMode?: string;
+type LiveTransportQaCommanderOptions = Omit<
+  LiveTransportQaCommandOptions,
+  "primaryModel" | "alternateModel" | "scenarioIds" | "fastMode" | "sutAccountId"
+> & {
   model?: string;
   altModel?: string;
   scenario?: string[];
-  listScenarios?: boolean;
   fast?: boolean;
-  allowFailures?: boolean;
-  failFast?: boolean;
-  profile?: string;
   sutAccount?: string;
-  credentialFile?: string;
-  credentialSource?: string;
-  credentialRole?: string;
 };
 
 /** Commander registration hook for one live-transport QA subcommand. */
@@ -352,30 +342,11 @@ function mapLiveTransportQaCommanderOptions(
   opts: LiveTransportQaCommanderOptions,
   normalizeInactiveSelectionOptions: boolean,
 ): LiveTransportQaCommandOptions {
-  if (!normalizeInactiveSelectionOptions) {
-    return {
-      ...(opts.channelDriver ? { channelDriver: opts.channelDriver } : {}),
-      concurrency: opts.concurrency,
-      repoRoot: opts.repoRoot,
-      outputDir: opts.outputDir,
-      providerMode: opts.providerMode,
-      primaryModel: opts.model,
-      alternateModel: opts.altModel,
-      fastMode: opts.fast,
-      allowFailures: opts.allowFailures,
-      failFast: opts.failFast,
-      profile: opts.profile,
-      scenarioIds: opts.scenario,
-      listScenarios: opts.listScenarios,
-      sutAccountId: opts.sutAccount,
-      credentialFile: opts.credentialFile,
-      credentialSource: opts.credentialSource,
-      credentialRole: opts.credentialRole,
-    };
-  }
   return {
     ...(opts.channelDriver ? { channelDriver: opts.channelDriver } : {}),
-    ...(opts.concurrency !== undefined ? { concurrency: opts.concurrency } : {}),
+    ...(!normalizeInactiveSelectionOptions || opts.concurrency !== undefined
+      ? { concurrency: opts.concurrency }
+      : {}),
     repoRoot: opts.repoRoot,
     outputDir: opts.outputDir,
     providerMode: opts.providerMode,
@@ -386,9 +357,13 @@ function mapLiveTransportQaCommanderOptions(
     failFast: opts.failFast,
     profile: opts.profile,
     scenarioIds: opts.scenario,
-    listScenarios: opts.listScenarios || undefined,
+    listScenarios: normalizeInactiveSelectionOptions
+      ? opts.listScenarios || undefined
+      : opts.listScenarios,
     sutAccountId: opts.sutAccount,
-    ...(opts.credentialFile ? { credentialFile: opts.credentialFile } : {}),
+    ...(!normalizeInactiveSelectionOptions || opts.credentialFile
+      ? { credentialFile: opts.credentialFile }
+      : {}),
     credentialSource: opts.credentialSource,
     credentialRole: opts.credentialRole,
   };

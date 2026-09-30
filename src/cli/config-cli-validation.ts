@@ -6,6 +6,7 @@ import type {
 } from "../config/config.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import { assertDeferredPluginMigrationConfigEditAllowed } from "../config/deferred-plugin-migration-config.js";
+import { configFailureHeading, isConfigReadFailure } from "../config/io.invalid-config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
@@ -49,12 +50,17 @@ import { writeInvalidConfigCliJson } from "./config-validation-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 
 function formatInvalidConfigRepairHint(
-  snapshot: Pick<ConfigFileSnapshot, "valid" | "issues" | "warnings" | "legacyIssues">,
+  snapshot: Pick<
+    ConfigFileSnapshot,
+    "valid" | "issues" | "warnings" | "legacyIssues" | "readError"
+  >,
   doctorMessage: string,
 ): string {
-  return isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
-    ? formatPluginPackagingRuntimeOutputRecoveryHint()
-    : `Run \`${formatCliCommand("openclaw doctor --fix")}\` ${doctorMessage}`;
+  return isConfigReadFailure(snapshot)
+    ? "Resolve the read error shown above, then retry."
+    : isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
+      ? formatPluginPackagingRuntimeOutputRecoveryHint()
+      : `Run \`${formatCliCommand("openclaw doctor --fix")}\` ${doctorMessage}`;
 }
 
 export function ensureValidConfigSnapshotForCli(
@@ -69,7 +75,7 @@ export function ensureValidConfigSnapshotForCli(
     writeInvalidConfigCliJson(runtime, snapshot);
     exitCliAfterOutput(runtime, 1);
   }
-  runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);
+  runtime.error(`${configFailureHeading(snapshot)}: ${shortenHomePath(snapshot.path)}`);
   for (const line of renderConfigValidationIssueLines(snapshot)) {
     runtime.error(line);
   }
@@ -223,44 +229,24 @@ function collectDryRunStaticErrorsForSkippedExecRefs(params: {
   refs: SecretRef[];
   config: OpenClawConfig;
 }): ConfigSetDryRunError[] {
-  const failures: ConfigSetDryRunError[] = [];
-  for (const ref of params.refs) {
+  return params.refs.flatMap((ref): ConfigSetDryRunError[] => {
     const id = ref.id.trim();
     const refLabel = `${ref.source}:${ref.provider}:${id}`;
+    let message: string | undefined;
     if (!id) {
-      failures.push({
-        kind: "resolvability",
-        message: "Error: Secret reference id is empty.",
-        ref: refLabel,
-      });
-      continue;
+      message = "Error: Secret reference id is empty.";
+    } else if (!isValidExecSecretRefId(id)) {
+      message = `Error: ${formatExecSecretRefIdValidationMessage()} (ref: ${refLabel}).`;
+    } else {
+      const providerConfig = params.config.secrets?.providers?.[ref.provider];
+      if (!providerConfig) {
+        message = `Error: Secret provider "${ref.provider}" is not configured (ref: ${refLabel}).`;
+      } else if (providerConfig.source !== ref.source) {
+        message = `Error: Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`;
+      }
     }
-    if (!isValidExecSecretRefId(id)) {
-      failures.push({
-        kind: "resolvability",
-        message: `Error: ${formatExecSecretRefIdValidationMessage()} (ref: ${refLabel}).`,
-        ref: refLabel,
-      });
-      continue;
-    }
-    const providerConfig = params.config.secrets?.providers?.[ref.provider];
-    if (!providerConfig) {
-      failures.push({
-        kind: "resolvability",
-        message: `Error: Secret provider "${ref.provider}" is not configured (ref: ${refLabel}).`,
-        ref: refLabel,
-      });
-      continue;
-    }
-    if (providerConfig.source !== ref.source) {
-      failures.push({
-        kind: "resolvability",
-        message: `Error: Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`,
-        ref: refLabel,
-      });
-    }
-  }
-  return failures;
+    return message ? [{ kind: "resolvability", message, ref: refLabel }] : [];
+  });
 }
 
 function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInDryRun: boolean }): {

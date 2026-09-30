@@ -970,6 +970,12 @@ export interface NodeWorkerLaunchContainers {
   launch_id: string;
 }
 
+export interface NodeWorkerLaunchProcessScopes {
+  descendants_reaped: number | null;
+  launch_id: string;
+  scope_kind: string;
+}
+
 export interface NodeWorkerLaunches {
   completed_at_ms: number | null;
   created_at_ms: number;
@@ -1769,6 +1775,7 @@ export interface Worktrees {
   base_ref: string;
   branch: string;
   created_at: number;
+  gc_protection_json: string | null;
   id: string;
   last_active_at: number;
   owner_id: string | null;
@@ -1853,6 +1860,7 @@ export interface DB {
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_worker_launch_cleanup: NodeWorkerLaunchCleanup;
   node_worker_launch_containers: NodeWorkerLaunchContainers;
+  node_worker_launch_process_scopes: NodeWorkerLaunchProcessScopes;
   node_worker_launches: NodeWorkerLaunches;
   node_worker_prepared_workspaces: NodeWorkerPreparedWorkspaces;
   node_worker_turns: NodeWorkerTurns;

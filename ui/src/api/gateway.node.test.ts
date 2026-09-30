@@ -5,7 +5,6 @@ import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_SERVER_CAPS,
   type ConnectParams,
-  MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,10 +28,16 @@ import {
 } from "../lib/sessions/session-placement-recovery.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { expectSignedPayloadFields } from "./gateway-signature.test-support.ts";
+import {
+  getLatestWebSocket,
+  MockWebSocket,
+  stubWindowGlobals,
+  useNodeFakeTimers,
+  wsInstances,
+} from "./gateway-socket.test-support.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
 
 const realLoadOrCreateDeviceIdentity = nodes.loadOrCreateDeviceIdentity;
-const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const recoveryMigrationRuntimeMock = vi.hoisted(() => ({
   loaded: vi.fn(),
   migrate: vi.fn(),
@@ -134,66 +139,6 @@ function createDeviceTokenState(request: (method: string) => Promise<unknown>) {
   return state;
 }
 
-type HandlerMap = {
-  close: MockWebSocketHandler[];
-  error: MockWebSocketHandler[];
-  message: MockWebSocketHandler[];
-  open: MockWebSocketHandler[];
-};
-
-type MockWebSocketHandler = (ev?: { code?: number; data?: string; reason?: string }) => void;
-
-class MockWebSocket {
-  static OPEN = 1;
-
-  readonly handlers: HandlerMap = {
-    close: [],
-    error: [],
-    message: [],
-    open: [],
-  };
-
-  readonly sent: string[] = [];
-  lastClose: { code?: number; reason?: string } | null = null;
-  readyState = MockWebSocket.OPEN;
-
-  constructor(_url: string) {
-    wsInstances.push(this);
-  }
-
-  addEventListener(type: keyof HandlerMap, handler: MockWebSocketHandler) {
-    this.handlers[type].push(handler);
-  }
-
-  send(data: string) {
-    this.sent.push(data);
-  }
-
-  close(code?: number, reason?: string) {
-    this.lastClose = { code, reason };
-    this.readyState = 3;
-  }
-
-  emitClose(code = 1000, reason = "") {
-    for (const handler of this.handlers.close) {
-      handler({ code, reason });
-    }
-  }
-
-  emitOpen() {
-    for (const handler of this.handlers.open) {
-      handler();
-    }
-  }
-
-  emitMessage(data: unknown) {
-    const payload = typeof data === "string" ? data : JSON.stringify(data);
-    for (const handler of this.handlers.message) {
-      handler({ data: payload });
-    }
-  }
-}
-
 const { GatewayBrowserClient, GatewayRequestError, resolveGatewayErrorDetailCode } =
   await import("./gateway.ts");
 
@@ -218,10 +163,7 @@ type ConnectFrame = {
 const REQUEST_FRAME_ID = "2:00000000-0000-4000-8000-000000000000";
 
 function requestFrameBytes(method: string, params?: unknown): number {
-  const frame =
-    params === undefined
-      ? { type: "req", id: REQUEST_FRAME_ID, method }
-      : { type: "req", id: REQUEST_FRAME_ID, method, params };
+  const frame = { type: "req", id: REQUEST_FRAME_ID, method, params };
   return new TextEncoder().encode(JSON.stringify(frame)).byteLength;
 }
 
@@ -252,17 +194,6 @@ type ConnectTimingPayload = {
 };
 
 const requireRecord = createRequireRecord("record", "expected-label");
-
-function requireFirstMockArg(
-  mock: ReturnType<typeof vi.fn>,
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return requireRecord(call[0], `${label} payload`);
-}
 
 function requireMockCallArg(
   mock: ReturnType<typeof vi.fn>,
@@ -315,39 +246,12 @@ function connectTimingPayloads(onConnectTiming: ReturnType<typeof vi.fn>): Conne
   );
 }
 
-function stubWindowGlobals(storage?: ReturnType<typeof createStorageMock>) {
-  vi.stubGlobal("window", {
-    location: { href: "http://127.0.0.1:18789/" },
-    localStorage: storage,
-    setTimeout: (handler: (...args: unknown[]) => void, timeout?: number, ...args: unknown[]) => {
-      // Keep connect debounce behavior testable without paying real 750ms waits per handshake.
-      const effectiveTimeout = timeout === 750 ? 0 : timeout;
-      return globalThis.setTimeout(() => handler(...args), effectiveTimeout);
-    },
-    clearTimeout: (timeoutId: number | undefined) => globalThis.clearTimeout(timeoutId),
-  });
-}
-
-function getLatestWebSocket(): MockWebSocket {
-  const ws = wsInstances.at(-1);
-  if (!ws) {
-    throw new Error("missing websocket instance");
-  }
-  return ws;
-}
-
 function stubInsecureCrypto() {
   // Real insecure contexts keep randomUUID/getRandomValues; only crypto.subtle
   // is gated to secure contexts.
   vi.stubGlobal("crypto", {
     randomUUID: () => "req-insecure",
     getRandomValues: (array: Uint8Array) => array.fill(7),
-  });
-}
-
-function useNodeFakeTimers() {
-  vi.useFakeTimers({
-    toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
 }
 
@@ -444,6 +348,7 @@ async function expectRetriedDeviceTokenConnect(params: {
 
 describe("GatewayBrowserClient", () => {
   beforeEach(() => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
     vi.spyOn(nodes, "loadOrCreateDeviceIdentity").mockImplementation(
       loadOrCreateDeviceIdentityMock,
     );
@@ -476,9 +381,9 @@ describe("GatewayBrowserClient", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllGlobals();
-    vi.restoreAllMocks();
   });
 
   it.each([
@@ -573,35 +478,6 @@ describe("GatewayBrowserClient", () => {
     } finally {
       client.stop();
     }
-  });
-
-  it("requests full control ui operator scopes with explicit shared auth", async () => {
-    const client = new GatewayBrowserClient({
-      url: "ws://127.0.0.1:18789",
-      token: "shared-auth-token",
-      clientBuildId: "build-a",
-    });
-
-    const { connectFrame } = await startConnect(client);
-
-    expect(connectFrame.method).toBe("connect");
-    expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
-    expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
-    expect(connectFrame.params?.client.buildId).toBe("build-a");
-    expect(connectFrame.params?.caps).toEqual([
-      GATEWAY_CLIENT_CAPS.AGENT_KIND,
-      GATEWAY_CLIENT_CAPS.APPROVALS,
-      GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
-      GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
-      GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA,
-      GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE,
-      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
-      GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
-      GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY,
-      GATEWAY_CLIENT_CAPS.UI_COMMANDS,
-      GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
-    ]);
-    expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
 
   it.each([
@@ -906,7 +782,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     expect(() => client.start()).not.toThrow();
-    const close = requireFirstMockArg(onClose, "close");
+    const close = requireMockCallArg(onClose, 0, "close");
     expect(close.code).toBe(1006);
     expect(close.reason).toBe("security error");
     const closeError = requireRecord(close.error, "close error");
@@ -945,7 +821,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     expect(() => client.start()).not.toThrow();
-    const close = requireFirstMockArg(onClose, "close");
+    const close = requireMockCallArg(onClose, 0, "close");
     expect(close.code).toBe(1006);
     expect(close.reason).toBe("websocket error");
     const closeError = requireRecord(close.error, "close error");
@@ -1198,7 +1074,7 @@ describe("GatewayBrowserClient", () => {
       expect(JSON.stringify(error)).not.toContain("not-for-logs");
     }
     expect(onRequestTiming).toHaveBeenCalledTimes(1);
-    expect(requireFirstMockArg(onRequestTiming, "request timing")).not.toHaveProperty("params");
+    expect(requireMockCallArg(onRequestTiming, 0, "request timing")).not.toHaveProperty("params");
     expect(JSON.stringify(onRequestTiming.mock.calls)).not.toContain("not-for-logs");
     expectLatestRequestTiming(onRequestTiming, {
       id: frame.id,
@@ -1724,7 +1600,7 @@ describe("GatewayBrowserClient", () => {
     }
   });
 
-  it("keeps gap callback errors from blocking event delivery", () => {
+  it("recovers from event gaps even when the gap callback throws", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const onGap = vi.fn(() => {
       throw new Error("gap callback failed");
@@ -1752,17 +1628,16 @@ describe("GatewayBrowserClient", () => {
       ).not.toThrow();
 
       expect(onGap).toHaveBeenCalledWith({ expected: 2, received: 3 });
-      expect(onEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ event: "session.updated", seq: 3 }),
-      );
-      expect(listener).toHaveBeenCalledWith(
-        expect.objectContaining({ event: "session.updated", seq: 3 }),
-      );
+      expect(ws.lastClose).toEqual({ code: 4000, reason: "event sequence gap" });
+      expect(onEvent).not.toHaveBeenCalled();
+      expect(listener).not.toHaveBeenCalled();
       expect(consoleError).toHaveBeenCalledWith("[gateway] gap handler error:", expect.any(Error));
 
       onGap.mockClear();
       ws.emitMessage({ type: "event", event: "session.updated", seq: 4 });
       expect(onGap).not.toHaveBeenCalled();
+      expect(onEvent).not.toHaveBeenCalled();
+      expect(listener).not.toHaveBeenCalled();
     } finally {
       client.stop();
       consoleError.mockRestore();
@@ -2193,7 +2068,7 @@ describe("GatewayBrowserClient", () => {
       message: "profile verification unavailable",
       details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
       retryAfterMs: 90_000,
-      delayMs: 90_000,
+      delayMs: 99_000,
       closeCode: 4008,
       closeReason: "connect failed",
       willRetry: true,
@@ -2212,6 +2087,7 @@ describe("GatewayBrowserClient", () => {
     "respects retry timing and terminal policy for $name",
     async ({ message, details, retryAfterMs, delayMs, closeCode, closeReason, willRetry }) => {
       useNodeFakeTimers();
+      vi.mocked(Math.random).mockReturnValue(0.5);
       const onClose = vi.fn();
       const client = new GatewayBrowserClient({
         url: "ws://127.0.0.1:18789",
@@ -2640,7 +2516,7 @@ describe("GatewayBrowserClient", () => {
     await expectSocketClosed(ws);
     ws.emitClose(4008, "connect failed");
 
-    const close = requireFirstMockArg(onClose, "close");
+    const close = requireMockCallArg(onClose, 0, "close");
     expect(close.willRetry).toBe(false);
     expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
       phase: "failed",

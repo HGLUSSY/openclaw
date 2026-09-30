@@ -988,6 +988,14 @@ CREATE TABLE IF NOT EXISTS node_worker_launch_cleanup (
   lineage_settled INTEGER CHECK (lineage_settled IS NULL OR lineage_settled = 1)
 ) STRICT;
 
+-- Older readers retain owned-anchor custody: lineage EOF is not this certificate.
+CREATE TABLE IF NOT EXISTS node_worker_launch_process_scopes (
+  launch_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES node_worker_launches(launch_id) ON DELETE CASCADE,
+  scope_kind TEXT NOT NULL CHECK (scope_kind = 'linux-subreaper'),
+  descendants_reaped INTEGER CHECK (descendants_reaped IS NULL OR descendants_reaped = 1)
+) STRICT;
+
 -- Turn receipts have a shorter lifetime than their physical worker owner.
 -- Keeping the launch running preserves capacity and predecessor cleanup semantics.
 CREATE TABLE IF NOT EXISTS node_worker_turns (
@@ -1852,7 +1860,8 @@ CREATE TABLE IF NOT EXISTS worktrees (
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL,
   removed_at INTEGER,
-  run_end_cleanup_json TEXT
+  run_end_cleanup_json TEXT,
+  gc_protection_json TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
