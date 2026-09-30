@@ -1,4 +1,4 @@
-import type { PluginHookBeforeModelResolveResult } from "./hook-before-agent-start.types.js";
+import type { PluginHookBeforeModelResolveResult } from "./hook-types.js";
 
 export function mergeBeforeModelResolveResults(
   previous: PluginHookBeforeModelResolveResult | undefined,
